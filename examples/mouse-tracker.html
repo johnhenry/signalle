@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Signalle Mouse Tracker Example</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 600px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        min-height: 100vh;
+      }
+      .tracker {
+        position: relative;
+        width: 100%;
+        height: 400px;
+        background: #f5f5f5;
+        border-radius: 8px;
+        margin: 1rem 0;
+        overflow: hidden;
+      }
+      .cursor {
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        background: #0066ff;
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        transition: all 0.1s ease;
+      }
+      .coordinates {
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 0.5rem;
+        border-radius: 4px;
+        font-size: 0.875rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Mouse Tracker</h1>
+    <p>Move your mouse inside the box to see the tracker in action.</p>
+
+    <div class="tracker" id="tracker">
+      <div class="cursor" id="cursor"></div>
+      <div class="coordinates" id="coordinates"></div>
+    </div>
+
+    <script type="module">
+      import { computed } from "./src/signal.mjs";
+      import { bindStyle, bind } from "./src/dom.mjs";
+
+      const mousePosition = computed([], async () => {
+        const tracker = document.getElementById("tracker");
+        const pos = { x: 0, y: 0 };
+
+        const handler = (e) => {
+          const rect = tracker.getBoundingClientRect();
+          pos.x = e.clientX - rect.left;
+          pos.y = e.clientY - rect.top;
+          updatePosition(pos);
+        };
+
+        tracker.addEventListener("mousemove", handler);
+        tracker.addEventListener("mouseleave", () => {
+          pos.x = -100;
+          pos.y = -100;
+          updatePosition(pos);
+        });
+
+        // Return cleanup function
+        return [pos, () => tracker.removeEventListener("mousemove", handler)];
+      });
+
+      const cursor = document.getElementById("cursor");
+      const coordinates = document.getElementById("coordinates");
+
+      function updatePosition(pos) {
+        cursor.style.left = `${pos.x}px`;
+        cursor.style.top = `${pos.y}px`;
+        coordinates.textContent = `X: ${Math.round(pos.x)}, Y: ${Math.round(
+          pos.y
+        )}`;
+      }
+    </script>
+  </body>
+</html>
