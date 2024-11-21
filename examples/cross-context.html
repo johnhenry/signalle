@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cross Context Signals Demo</title>
+  </head>
+  <body>
+    <div>
+      <h2>Main Window Signal Value: <span id="mainValue">0</span></h2>
+      <button id="increment">Increment</button>
+    </div>
+    <div>
+      <h2>Worker Signal Value: <span id="workerValue">0</span></h2>
+    </div>
+
+    <script type="module">
+      // Enhanced Signal implementation with structured cloning support
+      class Signal {
+        #value;
+        #version = 0;
+        #effects = new Set();
+        #channel;
+
+        constructor(initialValue, channelName = "default-signal") {
+          this.#value = initialValue;
+          this.#channel = new BroadcastChannel(channelName);
+
+          // Listen for updates from other contexts
+          this.#channel.onmessage = (event) => {
+            const { value, version } = event.data;
+            if (version > this.#version) {
+              this.#version = version;
+              this.#value = value;
+              this.#notifyEffects();
+            }
+          };
+        }
+
+        get value() {
+          return this.#value;
+        }
+
+        set value(newValue) {
+          // Use structuredClone for deep cloning of the value
+          const clonedValue = structuredClone(newValue);
+
+          if (Object.is(this.#value, clonedValue)) return;
+
+          this.#value = clonedValue;
+          this.#version++;
+
+          // Broadcast the update to other contexts
+          this.#channel.postMessage({
+            value: this.#value,
+            version: this.#version,
+          });
+
+          this.#notifyEffects();
+        }
+
+        subscribe(fn) {
+          this.#effects.add(fn);
+          fn(this.#value);
+          return () => this.#effects.delete(fn);
+        }
+
+        #notifyEffects() {
+          for (const effect of this.#effects) {
+            effect(this.#value);
+          }
+        }
+
+        // Clean up method
+        dispose() {
+          this.#channel.close();
+          this.#effects.clear();
+        }
+      }
+
+      // Create a shared signal
+      const counterSignal = new Signal(0, "counter");
+
+      // Set up UI updates
+      const mainValueEl = document.getElementById("mainValue");
+      const workerValueEl = document.getElementById("workerValue");
+      const incrementBtn = document.getElementById("increment");
+
+      // Subscribe to signal updates
+      counterSignal.subscribe((value) => {
+        mainValueEl.textContent = value;
+      });
+
+      // Handle increment button clicks
+      incrementBtn.addEventListener("click", () => {
+        counterSignal.value = counterSignal.value + 1;
+      });
+
+      // Create a worker to demonstrate cross-context communication
+      const workerCode = `
+            // Worker implementation of Signal
+            class Signal {
+                #value;
+                #version = 0;
+                #effects = new Set();
+                #channel;
+
+                constructor(initialValue, channelName = 'default-signal') {
+                    this.#value = initialValue;
+                    this.#channel = new BroadcastChannel(channelName);
+                    
+                    this.#channel.onmessage = (event) => {
+                        const { value, version } = event.data;
+                        if (version > this.#version) {
+                            this.#version = version;
+                            this.#value = value;
+                            this.#notifyEffects();
+                        }
+                    };
+                }
+
+                get value() {
+                    return this.#value;
+                }
+
+                set value(newValue) {
+                    const clonedValue = structuredClone(newValue);
+                    
+                    if (Object.is(this.#value, clonedValue)) return;
+
+                    this.#value = clonedValue;
+                    this.#version++;
+
+                    this.#channel.postMessage({
+                        value: this.#value,
+                        version: this.#version
+                    });
+
+                    this.#notifyEffects();
+                }
+
+                subscribe(fn) {
+                    this.#effects.add(fn);
+                    fn(this.#value);
+                    return () => this.#effects.delete(fn);
+                }
+
+                #notifyEffects() {
+                    for (const effect of this.#effects) {
+                        effect(this.#value);
+                    }
+                }
+
+                dispose() {
+                    this.#channel.close();
+                    this.#effects.clear();
+                }
+            }
+
+            // Create a signal in the worker
+            const counterSignal = new Signal(0, 'counter');
+
+            // Periodically increment the counter from the worker
+            setInterval(() => {
+                counterSignal.value = counterSignal.value + 2;
+            }, 2000);
+
+            // Post updates to main thread for display
+            counterSignal.subscribe(value => {
+                self.postMessage({ value });
+            });
+        `;
+
+      // Create a blob URL for the worker
+      const blob = new Blob([workerCode], { type: "text/javascript" });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
+
+      // Handle worker updates
+      worker.onmessage = (event) => {
+        workerValueEl.textContent = event.data.value;
+      };
+    </script>
+  </body>
+</html>

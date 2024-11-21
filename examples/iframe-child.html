@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Child Frame - Cross Context Signals Demo</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 20px;
+      }
+      button {
+        padding: 8px 16px;
+        margin: 5px;
+      }
+      .container {
+        margin-bottom: 20px;
+      }
+      pre {
+        background: #f5f5f5;
+        padding: 10px;
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Child Frame Signal Value: <span id="childValue">0</span></h2>
+      <button id="increment">Increment from Child</button>
+    </div>
+
+    <div class="container">
+      <h3>Latest Object Value:</h3>
+      <pre id="objectValue">Loading...</pre>
+    </div>
+
+    <script type="module">
+      class Signal {
+        #value;
+        #version = 0;
+        #effects = new Set();
+        #channel;
+
+        constructor(initialValue, channelName = "default-signal") {
+          this.#value = initialValue;
+          this.#channel = new BroadcastChannel(channelName);
+
+          this.#channel.onmessage = (event) => {
+            const { value, version } = event.data;
+            if (version > this.#version) {
+              this.#version = version;
+              this.#value = value;
+              this.#notifyEffects();
+            }
+          };
+        }
+
+        get value() {
+          return this.#value;
+        }
+
+        set value(newValue) {
+          const clonedValue = structuredClone(newValue);
+
+          if (Object.is(this.#value, clonedValue)) return;
+
+          this.#value = clonedValue;
+          this.#version++;
+
+          this.#channel.postMessage({
+            value: this.#value,
+            version: this.#version,
+          });
+
+          this.#notifyEffects();
+        }
+
+        subscribe(fn) {
+          this.#effects.add(fn);
+          fn(this.#value);
+          return () => this.#effects.delete(fn);
+        }
+
+        #notifyEffects() {
+          for (const effect of this.#effects) {
+            effect(this.#value);
+          }
+        }
+
+        dispose() {
+          this.#channel.close();
+          this.#effects.clear();
+        }
+      }
+
+      // Create signals with same channel names as parent
+      const counterSignal = new Signal(0, "iframe-counter");
+      const objectSignal = new Signal(
+        {
+          message: "Initializing...",
+          timestamp: new Date().toISOString(),
+        },
+        "iframe-object"
+      );
+
+      // Set up UI updates
+      const childValueEl = document.getElementById("childValue");
+      const objectValueEl = document.getElementById("objectValue");
+      const incrementBtn = document.getElementById("increment");
+
+      // Subscribe to counter signal updates
+      counterSignal.subscribe((value) => {
+        childValueEl.textContent = value;
+      });
+
+      // Subscribe to object signal updates
+      objectSignal.subscribe((value) => {
+        objectValueEl.textContent = JSON.stringify(value, null, 2);
+      });
+
+      // Handle increment button clicks
+      incrementBtn.addEventListener("click", () => {
+        counterSignal.value = counterSignal.value + 1;
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Signals Library Examples</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        line-height: 1.6;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .example {
+        margin-bottom: 40px;
+        padding: 20px;
+        border: 1px solid #eee;
+        border-radius: 8px;
+      }
+      .example h2 {
+        margin-top: 0;
+        color: #333;
+      }
+      .example p {
+        margin-bottom: 15px;
+      }
+      .example a {
+        display: inline-block;
+        padding: 8px 16px;
+        background: #007bff;
+        color: white;
+        text-decoration: none;
+        border-radius: 4px;
+      }
+      .example a:hover {
+        background: #0056b3;
+      }
+      code {
+        background: #f5f5f5;
+        padding: 2px 5px;
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Signals Library Examples</h1>
+
+    <div class="example">
+      <h2>Basic Todo App</h2>
+      <p>
+        A simple todo application demonstrating basic signal usage with DOM
+        integration.
+      </p>
+      <p>
+        <strong>Features:</strong> Basic signal state management, DOM updates,
+        event handling
+      </p>
+      <a href="todo.html">View Example</a>
+    </div>
+
+    <div class="example">
+      <h2>Cross-Context Communication (Web Worker)</h2>
+      <p>
+        Demonstrates signals working across different JavaScript contexts using
+        Web Workers.
+      </p>
+      <p>
+        <strong>Features:</strong> Cross-context state sync, structuredClone
+        integration, Web Worker communication
+      </p>
+      <a href="cross-context.html">View Example</a>
+    </div>
+
+    <div class="example">
+      <h2>Cross-Context Communication (iframes)</h2>
+      <p>
+        Shows signals working between parent and child iframes using
+        BroadcastChannel.
+      </p>
+      <p>
+        <strong>Features:</strong> iframe communication, shared state, complex
+        object synchronization
+      </p>
+      <a href="iframe-parent.html">View Example</a>
+    </div>
+
+    <footer
+      style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee"
+    >
+      <p>
+        Each example demonstrates different aspects of the signals library. View
+        the source code to understand the implementation details.
+      </p>
+    </footer>
+  </body>
+</html>

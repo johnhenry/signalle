@@ -15,6 +15,7 @@ Signals are reactive containers for values that can notify subscribers when they
 - 🔄 Efficient batch updates
 - 🌳 Tree-shakeable DOM integration
 - 🎨 Flexible rendering options
+- 🌐 Cross-context communication support
 - 📦 Tiny footprint (~2KB minified and gzipped)
 
 ## Installation
@@ -29,18 +30,18 @@ npm install signalle
 
 The library provides two ways to work with signals:
 
-- `Signal`: The class that implements the signal behavior. Use this when you need to extend or create custom signal types. It provides the core functionality for value containment, subscription management, and update notifications.
+- `signal` lowercase: A factory function that creates new Signal instances. This is the recommended way to create signals in your application. It provides a simpler, more ergonomic API for working with signals.
 
-- `signal`: A factory function that creates new Signal instances. This is the recommended way to create signals in your application. It provides a simpler, more ergonomic API for working with signals.
+- `Signal` (Uppercase): The class that implements the signal behavior. Use this when you need to extend or create custom signal types. It provides the core functionality for value containment, subscription management, and update notifications.
 
 ```javascript
-import { Signal, signal } from "signalle";
-
-// Using the Signal class directly (not recommended for general use)
-const countSignal = new Signal(0);
+import { signal, Signal } from "signalle";
 
 // Using the signal factory function (recommended)
 const count = signal(0);
+
+// Using the Signal class directly (not recommended for general use)
+const countSignal = new Signal(0);
 ```
 
 ### Core Functions
@@ -128,6 +129,35 @@ await Signal.batch(async () => {
   count.value = 3;
 }); // Logs: "Doubled value: 6" (only once)
 ```
+
+### Cross-Context Communication
+
+Signals can work seamlessly across different JavaScript contexts (Web Workers, iframes) using structuredClone for value transfer and BroadcastChannel for communication.
+
+```javascript
+// In main thread
+const sharedSignal = signal(0, "counter");
+effect(sharedSignal, (value) => {
+  console.log("Main thread:", value);
+});
+
+// In Web Worker or iframe
+const workerSignal = signal(0, "counter");
+effect(workerSignal, (value) => {
+  console.log("Worker:", value);
+});
+
+// Updates sync automatically between contexts
+sharedSignal.value = 42; // Both contexts log the new value
+```
+
+Key features of cross-context signals:
+
+- Automatic value synchronization using structuredClone
+- Support for complex objects and nested data structures
+- Race condition handling with version tracking
+- Bi-directional updates between contexts
+- Clean resource disposal
 
 ## DOM Integration
 
@@ -250,6 +280,32 @@ const signals = bindAll({
 });
 
 console.log(signals.name.value); // Access bound signals
+```
+
+## Examples
+
+The library includes several examples demonstrating different features:
+
+1. **Todo App** (todo.html)
+
+   - Basic signal usage with DOM integration
+   - Event handling and state management
+
+2. **Cross-Context with Web Workers** (cross-context.html)
+
+   - Signals working across Web Worker boundaries
+   - structuredClone integration
+   - Worker-to-main thread communication
+
+3. **Cross-Context with iframes** (iframe-parent.html)
+   - Parent-child iframe communication
+   - Shared state management
+   - Complex object synchronization
+
+View the examples by running:
+
+```bash
+npx live-server examples/
 ```
 
 ## TypeScript Support
