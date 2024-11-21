@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Signalle Todo Example</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        max-width: 600px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      .todo-input {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+      }
+      .todo-input input {
+        flex: 1;
+        padding: 0.5rem;
+        font-size: 1rem;
+      }
+      .todo-input button {
+        padding: 0.5rem 1rem;
+        font-size: 1rem;
+        background: #0066ff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .todo-input button:hover {
+        background: #0052cc;
+      }
+      .todo-list {
+        list-style: none;
+        padding: 0;
+      }
+      .todo-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem;
+        background: #f5f5f5;
+        margin-bottom: 0.5rem;
+        border-radius: 4px;
+      }
+      .todo-item.completed {
+        opacity: 0.6;
+      }
+      .todo-item input[type="checkbox"] {
+        width: 1.2rem;
+        height: 1.2rem;
+      }
+      .todo-item button {
+        margin-left: auto;
+        padding: 0.25rem 0.5rem;
+        background: #ff4444;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .todo-item button:hover {
+        background: #cc0000;
+      }
+      .todo-stats {
+        margin-top: 1rem;
+        padding: 1rem;
+        background: #f0f0f0;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Todo List</h1>
+
+    <div class="todo-input">
+      <input type="text" id="newTodo" placeholder="What needs to be done?" />
+      <button id="addTodo">Add</button>
+    </div>
+
+    <ul class="todo-list" id="todoList"></ul>
+
+    <div class="todo-stats" id="stats"></div>
+
+    <script type="module">
+      import { signal, computed } from "./src/signal.mjs";
+      import { bind, bindList } from "./src/dom.mjs";
+
+      // Create signals
+      const todos = signal([]);
+      const newTodoText = bind(document.getElementById("newTodo"), {
+        property: "value",
+        events: ["input"],
+        twoWay: true,
+      });
+
+      // Computed signals for stats
+      const stats = computed(todos, async (todos) => {
+        const statsData = {
+          total: todos.length,
+          completed: todos.filter((t) => t.completed).length,
+          active: todos.filter((t) => !t.completed).length,
+        };
+        return statsData;
+      });
+
+      // Bind stats to display
+      const statsDisplay = bind(document.getElementById("stats"), {
+        render: (stats) =>
+          stats
+            ? `
+        Total: ${stats.total} |
+        Completed: ${stats.completed} |
+        Active: ${stats.active}
+      `
+            : "",
+      });
+
+      // Subscribe to stats changes
+      stats.subscribe((value) => {
+        statsDisplay.value = value;
+      });
+
+      // Add new todo
+      document.getElementById("addTodo").addEventListener("click", () => {
+        const text = newTodoText.value.trim();
+        if (text) {
+          todos.update((list) => [
+            ...list,
+            {
+              id: Date.now(),
+              text,
+              completed: false,
+            },
+          ]);
+          newTodoText.value = "";
+        }
+      });
+
+      // Handle enter key
+      document.getElementById("newTodo").addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+          document.getElementById("addTodo").click();
+        }
+      });
+
+      // Bind todo list
+      bindList(document.getElementById("todoList"), todos, (todo) => {
+        const li = document.createElement("li");
+        li.className = "todo-item" + (todo.completed ? " completed" : "");
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = todo.completed;
+        checkbox.addEventListener("change", () => {
+          todos.update((list) =>
+            list.map((t) =>
+              t.id === todo.id ? { ...t, completed: checkbox.checked } : t
+            )
+          );
+        });
+
+        const text = document.createElement("span");
+        text.textContent = todo.text;
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.textContent = "Delete";
+        deleteBtn.addEventListener("click", () => {
+          todos.update((list) => list.filter((t) => t.id !== todo.id));
+        });
+
+        li.append(checkbox, text, deleteBtn);
+        return li;
+      });
+
+      // Add some initial todos
+      todos.value = [
+        { id: 1, text: "Try Signalle", completed: true },
+        { id: 2, text: "Build something awesome", completed: false },
+        { id: 3, text: "Share with friends", completed: false },
+      ];
+    </script>
+  </body>
+</html>
