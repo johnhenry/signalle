@@ -1,9 +1,9 @@
 /**
  * DOM Integration Example
- * 
+ *
  * This example shows how to use Signalle's DOM integration
  * to build interactive applications.
- * 
+ *
  * To run, serve this file with a web server and open in a browser.
  */
 
@@ -197,126 +197,119 @@ const html = `
 `;
 
 // Script runs when imported in a browser environment
-if (typeof document !== 'undefined') {
+if (typeof document !== "undefined") {
   // Insert HTML
   document.documentElement.innerHTML = html;
-  
+
   // Wait for DOM to be ready
-  document.addEventListener('DOMContentLoaded', async () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     // Import signals
-    const { signal, computed } = await import('../src/signal.mjs');
-    const { 
-      bind, bindAttribute, bindClass, bindList, 
-      computedBind 
-    } = await import('../src/dom.mjs');
-    
+    const { signal, computed } = await import("../src/index.mjs");
+    const { bind, bindAttribute, bindClass, bindList, computedBind } =
+      await import("../src/dom.mjs");
+
     // ------ Counter Example ------
     const counterValue = signal(0);
-    
+
     // Bind counter value to DOM
-    bind(document.getElementById('counter-value'), {
-      property: 'textContent',
-      render: (value) => String(value)
+    bind(document.getElementById("counter-value"), {
+      property: "textContent",
+      render: (value) => String(value),
     });
-    
+
     // Set up event listeners
-    document.getElementById('increment').addEventListener('click', () => {
+    document.getElementById("increment").addEventListener("click", () => {
       counterValue.value++;
     });
-    
-    document.getElementById('decrement').addEventListener('click', () => {
+
+    document.getElementById("decrement").addEventListener("click", () => {
       counterValue.value--;
     });
-    
+
     // Computed example
     const doubledValue = computed(counterValue, async (value) => value * 2);
-    computedBind(document.getElementById('doubledDisplay'), doubledValue, {
-      render: (value) => `Doubled: ${value}`
+    computedBind(document.getElementById("doubledDisplay"), doubledValue, {
+      render: (value) => `Doubled: ${value}`,
     });
-    
+
     // ------ Theme Toggle Example ------
     const darkTheme = signal(false);
-    
+
     // Two-way binding for the checkbox
-    bind(document.getElementById('themeToggle'), {
-      property: 'checked',
-      events: ['change'],
-      twoWay: true
+    bind(document.getElementById("themeToggle"), {
+      property: "checked",
+      events: ["change"],
+      twoWay: true,
     });
-    
+
     // Bind dark theme to body class
-    bindClass(document.body, 'dark-theme', darkTheme);
-    
+    bindClass(document.body, "dark-theme", darkTheme);
+
     // ------ User Form Example ------
-    const userName = signal('');
-    const userEmail = signal('');
-    
+    const userName = signal("");
+    const userEmail = signal("");
+
     // Two-way binding for inputs
-    bind(document.getElementById('nameInput'), {
-      property: 'value',
-      events: ['input', 'change'],
-      twoWay: true
+    bind(document.getElementById("nameInput"), {
+      property: "value",
+      events: ["input", "change"],
+      twoWay: true,
     });
-    
-    bind(document.getElementById('emailInput'), {
-      property: 'value',
-      events: ['input', 'change'],
-      twoWay: true
+
+    bind(document.getElementById("emailInput"), {
+      property: "value",
+      events: ["input", "change"],
+      twoWay: true,
     });
-    
+
     // Output bindings
-    bind(document.getElementById('nameOutput'), {
-      render: (value) => value || '-'
+    bind(document.getElementById("nameOutput"), {
+      render: (value) => value || "-",
     });
-    
-    bind(document.getElementById('emailOutput'), {
-      render: (value) => value || '-'
+
+    bind(document.getElementById("emailOutput"), {
+      render: (value) => value || "-",
     });
-    
+
     // ------ Dynamic List Example ------
     const items = signal([
-      { id: 1, text: 'Item 1' },
-      { id: 2, text: 'Item 2' }
+      { id: 1, text: "Item 1" },
+      { id: 2, text: "Item 2" },
     ]);
-    
+
     // Render function for list items
     const renderListItem = (item) => {
-      const div = document.createElement('div');
-      div.className = 'list-item';
-      
-      const text = document.createElement('span');
+      const div = document.createElement("div");
+      div.className = "list-item";
+
+      const text = document.createElement("span");
       text.textContent = item.text;
-      
-      const button = document.createElement('button');
-      button.textContent = 'Remove';
-      button.addEventListener('click', () => {
-        items.update(current => 
-          current.filter(i => i.id !== item.id)
-        );
+
+      const button = document.createElement("button");
+      button.textContent = "Remove";
+      button.addEventListener("click", () => {
+        items.update((current) => current.filter((i) => i.id !== item.id));
       });
-      
+
       div.appendChild(text);
       div.appendChild(button);
-      
+
       return div;
     };
-    
+
     // Bind list to container
-    bindList(
-      document.getElementById('listContainer'),
-      items,
-      renderListItem
-    );
-    
+    bindList(document.getElementById("listContainer"), items, renderListItem);
+
     // Add item button
-    document.getElementById('addItem').addEventListener('click', () => {
-      const newId = items.value.length > 0 
-        ? Math.max(...items.value.map(i => i.id)) + 1 
-        : 1;
-        
-      items.update(current => [
+    document.getElementById("addItem").addEventListener("click", () => {
+      const newId =
+        items.value.length > 0
+          ? Math.max(...items.value.map((i) => i.id)) + 1
+          : 1;
+
+      items.update((current) => [
         ...current,
-        { id: newId, text: `Item ${newId}` }
+        { id: newId, text: `Item ${newId}` },
       ]);
     });
   });
