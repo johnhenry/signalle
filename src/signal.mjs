@@ -201,3 +201,9 @@ export const computed = (deps, fn) => new Computed(deps, fn);
  * @returns {() => void}
  */
 export const effect = (signal, fn) => signal.subscribe(fn);
+
+/**
+ * @param {() => Promise<void>} fn
+ * @returns {Promise<void>}
+ */
+export const batch = Signal.batch;

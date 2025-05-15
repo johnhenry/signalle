@@ -108,7 +108,7 @@ count.value = 5; // Logs: "Count changed to: 5"
 Batch updates allow you to make multiple signal updates that will only trigger a single notification to subscribers. This is useful for optimizing performance when making multiple related updates.
 
 ```javascript
-import { Signal } from "signalle";
+import { signal, batch } from "signalle";
 
 const count = signal(0);
 const doubled = computed(count, async (value) => value * 2);
@@ -123,7 +123,7 @@ count.value = 2; // Logs: "Doubled value: 4"
 count.value = 3; // Logs: "Doubled value: 6"
 
 // With batching - triggers only one update
-await Signal.batch(async () => {
+await batch(async () => {
   count.value = 1;
   count.value = 2;
   count.value = 3;

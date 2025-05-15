@@ -155,7 +155,9 @@
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = todo.completed;
-        checkbox.addEventListener("change", () => {
+        checkbox.addEventListener("change", (e) => {
+          const checkbox = e.target;
+          console.log(checkbox.checked);
           todos.update((list) =>
             list.map((t) =>
               t.id === todo.id ? { ...t, completed: checkbox.checked } : t

@@ -15,71 +15,13 @@
     </div>
 
     <script type="module">
-      // Enhanced Signal implementation with structured cloning support
-      class Signal {
-        #value;
-        #version = 0;
-        #effects = new Set();
-        #channel;
-
-        constructor(initialValue, channelName = "default-signal") {
-          this.#value = initialValue;
-          this.#channel = new BroadcastChannel(channelName);
-
-          // Listen for updates from other contexts
-          this.#channel.onmessage = (event) => {
-            const { value, version } = event.data;
-            if (version > this.#version) {
-              this.#version = version;
-              this.#value = value;
-              this.#notifyEffects();
-            }
-          };
-        }
-
-        get value() {
-          return this.#value;
-        }
-
-        set value(newValue) {
-          // Use structuredClone for deep cloning of the value
-          const clonedValue = structuredClone(newValue);
-
-          if (Object.is(this.#value, clonedValue)) return;
-
-          this.#value = clonedValue;
-          this.#version++;
-
-          // Broadcast the update to other contexts
-          this.#channel.postMessage({
-            value: this.#value,
-            version: this.#version,
-          });
-
-          this.#notifyEffects();
-        }
-
-        subscribe(fn) {
-          this.#effects.add(fn);
-          fn(this.#value);
-          return () => this.#effects.delete(fn);
-        }
-
-        #notifyEffects() {
-          for (const effect of this.#effects) {
-            effect(this.#value);
-          }
-        }
-
-        // Clean up method
-        dispose() {
-          this.#channel.close();
-          this.#effects.clear();
-        }
-      }
+      import {
+        createBroadcastSignal,
+        generateWorkerCode,
+      } from "./src/broadcast.mjs";
 
       // Create a shared signal
-      const counterSignal = new Signal(0, "counter");
+      const counterSignal = createBroadcastSignal(0, "counter");
 
       // Set up UI updates
       const mainValueEl = document.getElementById("mainValue");
@@ -97,79 +39,20 @@
       });
 
       // Create a worker to demonstrate cross-context communication
-      const workerCode = `
-            // Worker implementation of Signal
-            class Signal {
-                #value;
-                #version = 0;
-                #effects = new Set();
-                #channel;
+      const workerCode = generateWorkerCode(`
+        // Create a signal in the worker
+        const counterSignal = createBroadcastSignal(0, 'counter');
 
-                constructor(initialValue, channelName = 'default-signal') {
-                    this.#value = initialValue;
-                    this.#channel = new BroadcastChannel(channelName);
-                    
-                    this.#channel.onmessage = (event) => {
-                        const { value, version } = event.data;
-                        if (version > this.#version) {
-                            this.#version = version;
-                            this.#value = value;
-                            this.#notifyEffects();
-                        }
-                    };
-                }
+        // Periodically increment the counter from the worker
+        setInterval(() => {
+          counterSignal.value = counterSignal.value + 2;
+        }, 2000);
 
-                get value() {
-                    return this.#value;
-                }
-
-                set value(newValue) {
-                    const clonedValue = structuredClone(newValue);
-                    
-                    if (Object.is(this.#value, clonedValue)) return;
-
-                    this.#value = clonedValue;
-                    this.#version++;
-
-                    this.#channel.postMessage({
-                        value: this.#value,
-                        version: this.#version
-                    });
-
-                    this.#notifyEffects();
-                }
-
-                subscribe(fn) {
-                    this.#effects.add(fn);
-                    fn(this.#value);
-                    return () => this.#effects.delete(fn);
-                }
-
-                #notifyEffects() {
-                    for (const effect of this.#effects) {
-                        effect(this.#value);
-                    }
-                }
-
-                dispose() {
-                    this.#channel.close();
-                    this.#effects.clear();
-                }
-            }
-
-            // Create a signal in the worker
-            const counterSignal = new Signal(0, 'counter');
-
-            // Periodically increment the counter from the worker
-            setInterval(() => {
-                counterSignal.value = counterSignal.value + 2;
-            }, 2000);
-
-            // Post updates to main thread for display
-            counterSignal.subscribe(value => {
-                self.postMessage({ value });
-            });
-        `;
+        // Post updates to main thread for display
+        counterSignal.subscribe(value => {
+          self.postMessage({ value });
+        });
+      `);
 
       // Create a blob URL for the worker
       const blob = new Blob([workerCode], { type: "text/javascript" });
