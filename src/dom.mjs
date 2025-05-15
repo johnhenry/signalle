@@ -1,4 +1,4 @@
-import { signal, computed } from "./signal.mjs";
+import { signal, computed, effect, untrack } from "./signal.mjs";
 
 /** @typedef {keyof HTMLElementEventMap} EventName */
 /** @typedef {keyof HTMLElement} ElementProperty */
@@ -28,7 +28,10 @@ export const bind = (element, options = {}) => {
     for (const event of opts.events) {
       element.addEventListener(event, async () => {
         const value = /** @type {T} */ (element[opts.property]);
-        boundSignal.value = value;
+        // Use untrack to avoid creating a circular dependency
+        untrack(() => {
+          boundSignal.value = value;
+        });
         // Allow time for signal to propagate
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
@@ -36,7 +39,7 @@ export const bind = (element, options = {}) => {
   }
 
   // Set up Signal -> DOM binding (one-way)
-  boundSignal.subscribe(async (value) => {
+  effect(boundSignal, async (value) => {
     const rendered = opts.render(value);
     element[opts.property] = rendered;
     // Allow time for DOM to update
@@ -73,7 +76,7 @@ export const computedBind = (element, deps, computeFn, options = {}) => {
   const opts = { ...defaultOptions, ...options };
   const computedSignal = computed(deps, computeFn);
 
-  computedSignal.subscribe(async (value) => {
+  effect(computedSignal, async (value) => {
     const rendered = opts.render(value);
     element[opts.property] = rendered;
     // Allow time for DOM to update
@@ -111,7 +114,7 @@ export const bindAttribute = (
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  signal.subscribe(updateAttribute);
+  effect(signal, updateAttribute);
   void updateAttribute(signal.value);
   return signal;
 };
@@ -138,7 +141,7 @@ export const bindClass = (element, className, signal) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  signal.subscribe(updateClass);
+  effect(signal, updateClass);
   void updateClass(signal.value);
   return signal;
 };
@@ -166,7 +169,7 @@ export const bindStyle = (element, property, signal, unit = "") => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  signal.subscribe(updateStyle);
+  effect(signal, updateStyle);
   void updateStyle(signal.value);
   return signal;
 };
@@ -222,7 +225,7 @@ export const bindList = (element, itemsSignal, renderItem) => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  itemsSignal.subscribe(updateList);
+  effect(itemsSignal, updateList);
   void updateList(itemsSignal.value || []);
   return itemsSignal;
 };
