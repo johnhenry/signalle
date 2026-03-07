@@ -16,12 +16,16 @@ export class Signal {
   static #batchQueue = new LinkedList();
   /** @type {boolean} */
   static #batching = false;
+  /** @type {object | null} */
+  #scope = null;
 
   /**
    * @param {T} initialValue
+   * @param {object} [scope] - Optional SignalScope for isolated reactivity
    */
-  constructor(initialValue) {
+  constructor(initialValue, scope = null) {
     this.#value = initialValue;
+    this.#scope = scope;
   }
 
   /** 
@@ -30,7 +34,11 @@ export class Signal {
    */
   get value() {
     // Track this signal access for automatic dependency tracking
-    Signal.#trackSignalAccess?.(this);
+    if (this.#scope?.trackSignalAccess) {
+      this.#scope.trackSignalAccess(this);
+    } else {
+      Signal.#trackSignalAccess?.(this);
+    }
     return this.#value;
   }
 
@@ -43,7 +51,7 @@ export class Signal {
 
     this.#value = newValue;
     this.#version++;
-    void this.#notify();
+    void this._notify();
   }
 
   /**
@@ -52,6 +60,14 @@ export class Signal {
    */
   peek() {
     return this.#value;
+  }
+
+  /**
+   * Get the current version (incremented on each change)
+   * @returns {number}
+   */
+  get version() {
+    return this.#version;
   }
 
   /**
@@ -64,7 +80,7 @@ export class Signal {
 
     this.#value = newValue;
     this.#version++;
-    void this.#notify();
+    void this._notify();
   }
 
   /**
@@ -82,6 +98,16 @@ export class Signal {
   }
 
   /**
+   * Add an effect callback without calling it immediately.
+   * Used by Computed to defer the initial callback until computation completes.
+   * @param {(value: T) => void} fn
+   * @returns {() => void} Unsubscribe function
+   */
+  _addEffect(fn) {
+    return this.#effects.add(fn);
+  }
+
+  /**
    * Add a computed dependency to this signal
    * @param {Computed<any>} computed
    * @returns {() => boolean} Function to remove the dependency
@@ -90,13 +116,17 @@ export class Signal {
     return this.#computedDeps.add(computed);
   }
 
-  /** 
-   * Notify all subscribers of a change
-   * @returns {Promise<void>} 
+  /**
+   * Notify all subscribers of a change (also called from scope.batch)
+   * @returns {Promise<void>}
    */
-  async #notify() {
-    if (Signal.#batching) {
-      Signal.#batchQueue.add(this);
+  async _notify() {
+    if (this.#scope ? this.#scope.batching : Signal.#batching) {
+      if (this.#scope) {
+        this.#scope.batchQueue.add(this);
+      } else {
+        Signal.#batchQueue.add(this);
+      }
       return;
     }
 
@@ -113,6 +143,18 @@ export class Signal {
       effectPromises.push(effect(this.#value));
     });
     await Promise.all(effectPromises);
+  }
+
+  /**
+   * Dispose this signal: clear all effects and computed deps.
+   */
+  dispose() {
+    this.#effects.clear();
+    this.#computedDeps.clear();
+  }
+
+  [Symbol.dispose]() {
+    this.dispose();
   }
 
   /**
@@ -150,7 +192,7 @@ export class Signal {
       // Process all queued updates
       const signals = Signal.#batchQueue.toArray();
       Signal.#batchQueue.clear();
-      await Promise.all(signals.map((signal) => signal.#notify()));
+      await Promise.all(signals.map((signal) => signal._notify()));
     }
   }
 
@@ -188,6 +230,8 @@ export class Computed extends Signal {
   #depUnsubscribes = new LinkedList();
   /** @type {number} */
   #lastVersion = -1;
+  /** @type {boolean} */
+  #initialized = false;
 
   /**
    * @param {Signal<any> | Signal<any>[]} deps
@@ -221,7 +265,7 @@ export class Computed extends Signal {
     // Check if any dependencies have changed by comparing versions
     let needsUpdate = false;
     for (const dep of this.#deps) {
-      if (dep instanceof Signal && dep["#version"] > this.#lastVersion) {
+      if (dep instanceof Signal && dep.version > this.#lastVersion) {
         needsUpdate = true;
         break;
       }
@@ -232,7 +276,7 @@ export class Computed extends Signal {
     }
 
     // Update the last version we computed with
-    this.#lastVersion = Math.max(...this.#deps.map(dep => dep instanceof Signal ? dep["#version"] : 0));
+    this.#lastVersion = Math.max(...this.#deps.map(dep => dep instanceof Signal ? dep.version : 0));
 
     // Clean up previous computation if needed
     if (this.#cleanup) {
@@ -255,6 +299,22 @@ export class Computed extends Signal {
     } else {
       super.value = result;
     }
+    this.#initialized = true;
+  }
+
+  /**
+   * Subscribe to this computed signal.
+   * Defers the initial callback until the first computation completes.
+   * @param {(value: T) => void} fn
+   * @returns {() => void} Unsubscribe function
+   */
+  subscribe(fn) {
+    if (this.#initialized) {
+      return super.subscribe(fn);
+    }
+    // Not yet initialized — add effect without immediate call.
+    // The _notify triggered by the initial computation will call fn.
+    return this._addEffect(fn);
   }
 
   /** @returns {T | undefined} */
@@ -273,12 +333,23 @@ export class Computed extends Signal {
   dispose() {
     // Remove all dependency subscriptions
     this.#depUnsubscribes.forEach(unsubscribe => unsubscribe());
-    
+
     // Run cleanup function if it exists
     if (this.#cleanup) {
-      void this.#cleanup();
+      try {
+        const result = this.#cleanup();
+        if (result && typeof result.catch === "function") {
+          result.catch(() => {}); // prevent unhandled rejection
+        }
+      } catch {
+        // cleanup errors should not propagate
+      }
       this.#cleanup = null;
     }
+  }
+
+  [Symbol.dispose]() {
+    this.dispose();
   }
 }
 
@@ -315,50 +386,75 @@ export const effect = (signal, fn) => signal.subscribe(fn);
  */
 export const createEffect = (fn) => {
   const trackedSignals = new Set();
-  
+  let allUnsubscribes = [];
+  let isRunning = false;
+  let pending = false;
+
   // Create a tracker function that will record signal access
   const trackSignal = (signal) => {
     trackedSignals.add(signal);
   };
-  
+
+  // Schedule a re-run via macrotask to coalesce multiple triggers
+  // from the same dependency cascade (e.g. count → doubled both firing).
+  // Uses setTimeout(0) so all microtask-based notification chains settle
+  // before runEffect fires, ensuring the pending flag properly deduplicates.
+  const scheduleEffect = () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => {
+      pending = false;
+      runEffect();
+    }, 0);
+  };
+
   // The effect function that will run and track dependencies
   const runEffect = () => {
+    // Re-entry guard
+    if (isRunning) return;
+    isRunning = true;
+
+    // Unsubscribe from previous dependencies
+    allUnsubscribes.forEach(unsub => unsub());
+    allUnsubscribes = [];
+
     // Clear previous dependencies
     trackedSignals.clear();
-    
+
     // Set up tracking
     Signal.setTracker(trackSignal);
-    
+
     try {
       // Run the effect, tracking will happen automatically
       fn();
     } finally {
       // Clean up tracking
       Signal.clearTracker();
-      
-      // Subscribe to all accessed signals
+
+      // Subscribe to all accessed signals (without immediate callback).
+      // Use scheduleEffect so multiple dep changes coalesce into one re-run.
       const unsubscribes = [];
       trackedSignals.forEach(signal => {
-        const unsubscribe = signal.subscribe(() => {
-          // When any dependency changes, re-run the effect
-          runEffect();
+        const unsubscribe = signal._addEffect(() => {
+          scheduleEffect();
         });
         unsubscribes.push(unsubscribe);
       });
-      
+
       // Store unsubscribe functions
       allUnsubscribes = unsubscribes;
+      isRunning = false;
     }
   };
-  
-  // Start with initial run
-  let allUnsubscribes = [];
+
+  // Start with initial synchronous run
   runEffect();
-  
+
   // Return function to clean up all subscriptions
   return () => {
     allUnsubscribes.forEach(unsubscribe => unsubscribe());
     allUnsubscribes = [];
+    pending = false;
   };
 };
 
