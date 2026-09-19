@@ -33,9 +33,17 @@ export class Signal {
    * @returns {T} 
    */
   get value() {
-    // Track this signal access for automatic dependency tracking
-    if (this.#scope?.trackSignalAccess) {
-      this.#scope.trackSignalAccess(this);
+    // Track this signal access for automatic dependency tracking.
+    // Scoped signals ALWAYS consult their own scope's tracker — never the
+    // global static one — even when the scope has no tracker currently
+    // active (i.e. no `createEffect`/`SignalScope#createEffect` call is
+    // in progress). Falling through to the global tracker here would let a
+    // scoped signal's access "leak" into an unrelated, non-scoped effect's
+    // dependency set (or vice versa), defeating the whole point of
+    // SignalScope. See SignalScope#createEffect in scope.mjs for the
+    // scope-isolated counterpart to the global createEffect below.
+    if (this.#scope) {
+      this.#scope.trackSignalAccess?.(this);
     } else {
       Signal.#trackSignalAccess?.(this);
     }
@@ -236,9 +244,10 @@ export class Computed extends Signal {
   /**
    * @param {Signal<any> | Signal<any>[]} deps
    * @param {(...args: any[]) => Promise<T>} computeFn
+   * @param {object} [scope] - Optional SignalScope for isolated reactivity (see SignalScope#computed)
    */
-  constructor(deps, computeFn) {
-    super(undefined);
+  constructor(deps, computeFn, scope = null) {
+    super(undefined, scope);
     this.#deps = Array.isArray(deps) ? deps : [deps];
     this.#compute = computeFn;
 
@@ -380,83 +389,111 @@ export const computed = (deps, fn) => new Computed(deps, fn);
 export const effect = (signal, fn) => signal.subscribe(fn);
 
 /**
- * Creates an effect that automatically tracks signal dependencies
+ * Internal factory that builds an auto-tracking `createEffect`-style
+ * function against a pair of set/clear tracker callbacks. This lets the
+ * same dependency-tracking logic be reused both by the global
+ * `createEffect` below (backed by the module-static `Signal.setTracker`/
+ * `Signal.clearTracker`) and by `SignalScope#createEffect` in scope.mjs
+ * (backed by that scope's own, independent `trackSignalAccess` field), so
+ * that two scopes' auto-tracking effects never share or clobber each
+ * other's tracker state.
+ * @param {(trackFn: (signal: Signal<any>) => void) => void} setTracker
+ * @param {() => void} clearTracker
+ * @returns {(fn: () => void) => () => void}
+ */
+export function createEffectWithTracker(setTracker, clearTracker) {
+  return function (fn) {
+    const trackedSignals = new Set();
+    let allUnsubscribes = [];
+    let isRunning = false;
+    let pending = false;
+
+    // Create a tracker function that will record signal access
+    const trackSignal = (signal) => {
+      trackedSignals.add(signal);
+    };
+
+    // Schedule a re-run via macrotask to coalesce multiple triggers
+    // from the same dependency cascade (e.g. count → doubled both firing).
+    // Uses setTimeout(0) so all microtask-based notification chains settle
+    // before runEffect fires, ensuring the pending flag properly deduplicates.
+    const scheduleEffect = () => {
+      if (pending) return;
+      pending = true;
+      setTimeout(() => {
+        pending = false;
+        runEffect();
+      }, 0);
+    };
+
+    // The effect function that will run and track dependencies
+    const runEffect = () => {
+      // Re-entry guard
+      if (isRunning) return;
+      isRunning = true;
+
+      // Unsubscribe from previous dependencies
+      allUnsubscribes.forEach(unsub => unsub());
+      allUnsubscribes = [];
+
+      // Clear previous dependencies
+      trackedSignals.clear();
+
+      // Set up tracking
+      setTracker(trackSignal);
+
+      try {
+        // Run the effect, tracking will happen automatically
+        fn();
+      } finally {
+        // Clean up tracking
+        clearTracker();
+
+        // Subscribe to all accessed signals (without immediate callback).
+        // Use scheduleEffect so multiple dep changes coalesce into one re-run.
+        const unsubscribes = [];
+        trackedSignals.forEach(signal => {
+          const unsubscribe = signal._addEffect(() => {
+            scheduleEffect();
+          });
+          unsubscribes.push(unsubscribe);
+        });
+
+        // Store unsubscribe functions
+        allUnsubscribes = unsubscribes;
+        isRunning = false;
+      }
+    };
+
+    // Start with initial synchronous run
+    runEffect();
+
+    // Return function to clean up all subscriptions
+    return () => {
+      allUnsubscribes.forEach(unsubscribe => unsubscribe());
+      allUnsubscribes = [];
+      pending = false;
+    };
+  };
+}
+
+/**
+ * Creates an effect that automatically tracks signal dependencies.
+ *
+ * IMPORTANT — scope isolation: this global `createEffect` always uses the
+ * module-static tracker (`Signal.setTracker`/`Signal.clearTracker`), which
+ * is shared process-wide. Per the fix to `Signal#value` above, it will
+ * simply fail to auto-track any signal created via `SignalScope#signal`
+ * (scoped signals only ever report access to *their own scope's* tracker).
+ * If you're working with a `SignalScope` (from `signalle/scope`), use
+ * `scope.createEffect(fn)` instead — it has fully independent tracker
+ * state per scope, so concurrent logical contexts (e.g. concurrent server
+ * requests each with their own scope) can safely run auto-tracking effects
+ * without racing or corrupting each other's dependency tracking.
  * @param {() => void} fn
  * @returns {() => void}
  */
-export const createEffect = (fn) => {
-  const trackedSignals = new Set();
-  let allUnsubscribes = [];
-  let isRunning = false;
-  let pending = false;
-
-  // Create a tracker function that will record signal access
-  const trackSignal = (signal) => {
-    trackedSignals.add(signal);
-  };
-
-  // Schedule a re-run via macrotask to coalesce multiple triggers
-  // from the same dependency cascade (e.g. count → doubled both firing).
-  // Uses setTimeout(0) so all microtask-based notification chains settle
-  // before runEffect fires, ensuring the pending flag properly deduplicates.
-  const scheduleEffect = () => {
-    if (pending) return;
-    pending = true;
-    setTimeout(() => {
-      pending = false;
-      runEffect();
-    }, 0);
-  };
-
-  // The effect function that will run and track dependencies
-  const runEffect = () => {
-    // Re-entry guard
-    if (isRunning) return;
-    isRunning = true;
-
-    // Unsubscribe from previous dependencies
-    allUnsubscribes.forEach(unsub => unsub());
-    allUnsubscribes = [];
-
-    // Clear previous dependencies
-    trackedSignals.clear();
-
-    // Set up tracking
-    Signal.setTracker(trackSignal);
-
-    try {
-      // Run the effect, tracking will happen automatically
-      fn();
-    } finally {
-      // Clean up tracking
-      Signal.clearTracker();
-
-      // Subscribe to all accessed signals (without immediate callback).
-      // Use scheduleEffect so multiple dep changes coalesce into one re-run.
-      const unsubscribes = [];
-      trackedSignals.forEach(signal => {
-        const unsubscribe = signal._addEffect(() => {
-          scheduleEffect();
-        });
-        unsubscribes.push(unsubscribe);
-      });
-
-      // Store unsubscribe functions
-      allUnsubscribes = unsubscribes;
-      isRunning = false;
-    }
-  };
-
-  // Start with initial synchronous run
-  runEffect();
-
-  // Return function to clean up all subscriptions
-  return () => {
-    allUnsubscribes.forEach(unsubscribe => unsubscribe());
-    allUnsubscribes = [];
-    pending = false;
-  };
-};
+export const createEffect = createEffectWithTracker(Signal.setTracker, Signal.clearTracker);
 
 /**
  * Batch multiple signal updates to prevent intermediate re-renders

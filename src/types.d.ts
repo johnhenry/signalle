@@ -99,7 +99,14 @@ declare module 'signalle' {
   ): () => void;
 
   /**
-   * Creates an effect that automatically tracks signal dependencies
+   * Creates an effect that automatically tracks signal dependencies.
+   *
+   * NOT scope-isolated: this tracks dependencies through a single
+   * module-static tracker shared by the whole process, so it will not
+   * auto-track signals created via a `SignalScope` (`signalle/scope`), and
+   * is unsafe to rely on for isolation across concurrent logical contexts
+   * (e.g. concurrent server requests). Use `SignalScope#createEffect`
+   * instead when working with a scope.
    * @param fn Function to run, any signals accessed inside will be tracked
    * @returns A function to cancel the effect
    */
@@ -123,9 +130,12 @@ declare module 'signalle/dom' {
   import { Signal, Computed } from 'signalle';
 
   /**
-   * Default options for binding signals to DOM elements
+   * Shape of the options object accepted by `bind`, `bindAll`, and
+   * `computedBind`. There is no runtime `defaultOptions` export from
+   * `signalle/dom` — the defaults are internal to the module — so this is
+   * expressed as a plain type rather than `typeof defaultOptions`.
    */
-  export const defaultOptions: {
+  type BindOptions = {
     property: keyof HTMLElement;
     events: (keyof HTMLElementEventMap)[];
     render: (value: any) => string;
@@ -140,7 +150,7 @@ declare module 'signalle/dom' {
    */
   export function bind<T>(
     element: { [key: string]: any },
-    options?: Partial<typeof defaultOptions>
+    options?: Partial<BindOptions>
   ): Signal<T>;
 
   /**
@@ -149,7 +159,7 @@ declare module 'signalle/dom' {
    * @returns Object with the same keys mapped to bound signals
    */
   export function bindAll(bindings: {
-    [key: string]: { element: { [key: string]: any } } & Partial<typeof defaultOptions>;
+    [key: string]: { element: { [key: string]: any } } & Partial<BindOptions>;
   }): { [key: string]: Signal<any> };
 
   /**
@@ -164,7 +174,7 @@ declare module 'signalle/dom' {
     element: { [key: string]: any },
     deps: Signal<any> | Signal<any>[],
     computeFn: (...args: any[]) => Promise<T>,
-    options?: Partial<typeof defaultOptions>
+    options?: Partial<BindOptions>
   ): Computed<T>;
 
   /**
@@ -243,4 +253,179 @@ declare module 'signalle/dom' {
     itemsSignal: Signal<Array<T & { id: string | number }>>,
     renderItem: (item: T & { id: string | number }) => any
   ): Signal<Array<T & { id: string | number }>>;
+}
+
+declare module 'signalle/stream' {
+  import { Signal } from 'signalle';
+
+  /**
+   * Options shared by `toReadableStream` and `toSSEResponse`.
+   */
+  interface ToStreamOptions<T> {
+    /** Transform value before sending (default: JSON.stringify) */
+    transform?: (value: T) => string;
+    /** SSE event name (omit for the default, unnamed event) */
+    event?: string;
+    /** Whether to send the signal's current value immediately (default: true) */
+    sendInitial?: boolean;
+  }
+
+  /**
+   * Convert a signal into a ReadableStream that emits SSE-formatted strings
+   * every time the signal's value changes.
+   * @param sig The signal to observe
+   * @param options Stream formatting options
+   * @returns A ReadableStream of SSE-formatted string chunks
+   */
+  export function toReadableStream<T>(
+    sig: Signal<T>,
+    options?: ToStreamOptions<T>
+  ): ReadableStream<string>;
+
+  /**
+   * Convert a signal into a ready-to-send Server-Sent Events Response.
+   * @param sig The signal to observe
+   * @param options Stream formatting options, plus CORS configuration
+   * @returns A Response with `Content-Type: text/event-stream` and related headers
+   */
+  export function toSSEResponse<T>(
+    sig: Signal<T>,
+    options?: ToStreamOptions<T> & {
+      /** Set the `Access-Control-Allow-Origin` header. `true` for "*", or a specific origin string. */
+      cors?: boolean | string;
+    }
+  ): Response;
+}
+
+declare module 'signalle/scope' {
+  import { Signal, Computed } from 'signalle';
+
+  /**
+   * An isolated signal scope with its own batch queue and dependency
+   * tracking state. Use `createScope()` to get an independent reactivity
+   * context that's safe for multi-tenant/concurrent server use.
+   *
+   * IMPORTANT: only `signal()`, `computed()`, `effect()`, `createEffect()`,
+   * `batch()`, and `untrack()` on this class are scope-isolated. The
+   * module-level `createEffect` exported from `signalle` (not this class's
+   * `createEffect` method) is NOT scope-aware — see its documentation.
+   */
+  export class SignalScope {
+    /**
+     * Create a new signal bound to this scope.
+     */
+    signal<T>(initialValue: T): Signal<T>;
+
+    /**
+     * Create a computed signal bound to this scope.
+     */
+    computed<T>(
+      deps: Signal<any> | Signal<any>[],
+      fn: (...args: any[]) => Promise<T>
+    ): Computed<T>;
+
+    /**
+     * Create an effect bound to this scope, cleaned up automatically by `dispose()`.
+     */
+    effect<T>(sig: Signal<T>, fn: (value: T) => void): () => void;
+
+    /**
+     * Create an auto-tracking effect bound to this scope — the
+     * scope-isolated counterpart to the module-level `createEffect`. Safe
+     * to use concurrently across independent scopes (e.g. one per
+     * server request), unlike the module-level `createEffect`.
+     */
+    createEffect(fn: () => void): () => void;
+
+    /**
+     * Batch signal updates within this scope.
+     */
+    batch(fn: () => Promise<void>): Promise<void>;
+
+    /**
+     * Run a function without tracking dependencies in this scope.
+     */
+    untrack<R>(fn: () => R): R;
+
+    /**
+     * Dispose of all effects created in this scope.
+     */
+    dispose(): void;
+
+    [Symbol.dispose](): void;
+  }
+
+  /**
+   * The object returned by `createScope()`: bound, scope-isolated
+   * counterparts to the top-level `signalle` API.
+   */
+  interface ScopeHandle {
+    signal: SignalScope['signal'];
+    computed: SignalScope['computed'];
+    effect: SignalScope['effect'];
+    createEffect: SignalScope['createEffect'];
+    batch: SignalScope['batch'];
+    untrack: SignalScope['untrack'];
+    dispose: () => void;
+    [Symbol.dispose](): void;
+  }
+
+  /**
+   * Create an isolated signal scope.
+   * @returns Scope-bound signal/computed/effect/createEffect/batch/untrack/dispose functions
+   */
+  export function createScope(): ScopeHandle;
+}
+
+declare module 'signalle/broadcast' {
+  /**
+   * A signal that synchronizes its value across browser tabs, iframes, or
+   * workers via `BroadcastChannel`.
+   */
+  export class BroadcastSignal<T> {
+    constructor(initialValue: T, channelName?: string);
+
+    /** Gets the current value of the signal. */
+    get value(): T;
+
+    /**
+     * Sets a new value, `structuredClone`-ing it and broadcasting the
+     * change to every other `BroadcastSignal` on the same channel name.
+     */
+    set value(newValue: T);
+
+    /**
+     * Subscribes to changes in the signal (including changes broadcast in
+     * from other contexts). Called immediately with the current value.
+     * @returns A function to unsubscribe
+     */
+    subscribe(fn: (value: T) => void): () => void;
+
+    /**
+     * Closes the underlying BroadcastChannel and clears all subscriptions.
+     */
+    dispose(): void;
+  }
+
+  /**
+   * Creates a new broadcast signal that stays in sync with other same-named
+   * broadcast signals across tabs, iframes, or workers.
+   * @param initialValue The initial value of the signal
+   * @param channelName Optional BroadcastChannel name (default: `'default-signal'`)
+   * @returns A new broadcast signal instance
+   */
+  export function createBroadcastSignal<T>(
+    initialValue: T,
+    channelName?: string
+  ): BroadcastSignal<T>;
+
+  /**
+   * Generates worker code (as a string) that includes the `BroadcastSignal`
+   * implementation plus a `createBroadcastSignal`-equivalent factory, so it
+   * can be embedded into a Worker/`Blob` URL without a bundler.
+   * @param signalCode Code that uses the generated factory function
+   * @param name Name to bind the factory function to in the generated code (default: `'createBroadcastSignal'`)
+   * @returns The complete worker code as a string
+   */
+  export function generateWorkerCode(signalCode: string, name?: string): string;
 }

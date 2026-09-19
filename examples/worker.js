@@ -1,7 +1,7 @@
-import { broadcastSignal } from "../src/broadcast.mjs";
+import { createBroadcastSignal } from "../src/broadcast.mjs";
 
 // Setup shared signal
-const sharedText = broadcastSignal("", "sharedText");
+const sharedText = createBroadcastSignal("", "sharedText");
 
 // Log updates
 sharedText.subscribe((value) => {

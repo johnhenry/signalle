@@ -1,5 +1,5 @@
 import { LinkedList } from './linked-list.mjs';
-import { Signal, Computed, effect } from './signal.mjs';
+import { Signal, Computed, effect, createEffectWithTracker } from './signal.mjs';
 
 /**
  * An isolated signal scope with its own batch queue and tracking state.
@@ -29,13 +29,21 @@ export class SignalScope {
 
   /**
    * Create a computed signal bound to this scope.
+   *
+   * `Computed` extends `Signal` and its constructor does accept an optional
+   * `scope` argument (forwarded to `super()`, just like `Signal`'s own
+   * constructor) — so it's threaded through here for consistency with
+   * `signal()` above. This matters in practice: without it, reading a
+   * scoped computed's `.value` inside a `SignalScope#createEffect` callback
+   * would silently fail to register as a dependency, since an unscoped
+   * `Computed` only ever reports access to the *global* static tracker.
    * @template T
    * @param {Signal<any> | Signal<any>[]} deps
    * @param {(...args: any[]) => Promise<T>} fn
    * @returns {Computed<T>}
    */
   computed(deps, fn) {
-    return new Computed(deps, fn);
+    return new Computed(deps, fn, this);
   }
 
   /**
@@ -51,6 +59,35 @@ export class SignalScope {
     return () => {
       unsub();
       this.#cleanups.delete(unsub);
+    };
+  }
+
+  /**
+   * Create an auto-tracking effect bound to this scope — the scope-isolated
+   * counterpart to the global `createEffect` exported from `signalle`.
+   *
+   * Unlike the global `createEffect`, which tracks dependencies through a
+   * single module-static tracker shared by the whole process, this method
+   * tracks dependencies through *this scope's own* `trackSignalAccess`
+   * field. That means two `SignalScope` instances can each run
+   * `createEffect`-style auto-tracking effects — even interleaved/nested
+   * within the same tick — without one scope's tracking corrupting the
+   * other's. This is what makes it safe to use per-request (or otherwise
+   * per-logical-context) in concurrent settings, unlike the global
+   * `createEffect`.
+   * @param {() => void} fn
+   * @returns {() => void} Cleanup function; also removed automatically by `dispose()`.
+   */
+  createEffect(fn) {
+    const runTrackedEffect = createEffectWithTracker(
+      (trackFn) => { this.trackSignalAccess = trackFn; },
+      () => { this.trackSignalAccess = null; }
+    );
+    const cleanup = runTrackedEffect(fn);
+    this.#cleanups.add(cleanup);
+    return () => {
+      cleanup();
+      this.#cleanups.delete(cleanup);
     };
   }
 
@@ -105,7 +142,7 @@ export class SignalScope {
 
 /**
  * Create an isolated signal scope.
- * @returns {{ signal: Function, computed: Function, effect: Function, batch: Function, untrack: Function, dispose: Function }}
+ * @returns {{ signal: Function, computed: Function, effect: Function, createEffect: Function, batch: Function, untrack: Function, dispose: Function }}
  */
 export const createScope = () => {
   const scope = new SignalScope();
@@ -113,6 +150,7 @@ export const createScope = () => {
     signal: scope.signal.bind(scope),
     computed: scope.computed.bind(scope),
     effect: scope.effect.bind(scope),
+    createEffect: scope.createEffect.bind(scope),
     batch: scope.batch.bind(scope),
     untrack: scope.untrack.bind(scope),
     dispose: scope.dispose.bind(scope),

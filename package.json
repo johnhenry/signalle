@@ -13,6 +13,18 @@
     "./dom": {
       "types": "./src/types.d.ts",
       "import": "./src/dom.mjs"
+    },
+    "./stream": {
+      "types": "./src/types.d.ts",
+      "import": "./src/stream.mjs"
+    },
+    "./scope": {
+      "types": "./src/types.d.ts",
+      "import": "./src/scope.mjs"
+    },
+    "./broadcast": {
+      "types": "./src/types.d.ts",
+      "import": "./src/broadcast.mjs"
     }
   },
   "files": [
@@ -40,6 +52,7 @@
   "author": "John Henry",
   "license": "MIT",
   "devDependencies": {
+    "jsdom": "^25.0.0",
     "nodemon": "^3.0.1",
     "typescript": "^5.0.0"
   },
