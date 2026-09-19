@@ -143,6 +143,44 @@ test('SignalScope#createEffect: tracker state stays isolated across two scopes e
   scopeB.dispose();
 });
 
+test('SignalScope#batch: nested batch() calls do not prematurely flush the outer batch', async () => {
+  // Same bug/fix as the global Signal.batch() regression test in
+  // signal.test.mjs, applied to SignalScope's own independent batch queue:
+  // a nested batch() call used to flip `batching` off and drain the shared
+  // `batchQueue` as soon as IT finished, even while an outer batch() on the
+  // same scope was still in progress — breaking the outer batch's
+  // atomicity guarantee.
+  const scope = createScope();
+  const s1 = scope.signal('a');
+  const s2 = scope.signal('b');
+  const s3 = scope.signal('c');
+
+  const events = [];
+  scope.effect(s1, (v) => events.push(`s1:${v}`));
+  scope.effect(s2, (v) => events.push(`s2:${v}`));
+  scope.effect(s3, (v) => events.push(`s3:${v}`));
+  events.length = 0;
+
+  await scope.batch(async () => {
+    s1.value = 'a2';
+    await scope.batch(async () => {
+      s2.value = 'b2';
+    });
+    s3.value = 'c2';
+    assert.deepEqual(events, [], 'No effects should fire until the OUTER batch completes');
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.deepEqual(
+    events,
+    ['s1:a2', 's2:b2', 's3:c2'],
+    'All three updates should flush together once the outer batch completes'
+  );
+
+  scope.dispose();
+});
+
 test('global createEffect does not auto-track scope-bound signals (documents the isolation boundary)', async () => {
   const { createEffect } = await import('../src/signal.mjs');
   const scope = createScope();

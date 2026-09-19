@@ -28,9 +28,16 @@ class BroadcastSignal {
   }
 
   set value(newValue) {
-    const clonedValue = structuredClone(newValue);
+    // Compare the RAW incoming value against the current value before
+    // cloning. structuredClone() always returns a fresh reference for
+    // objects/arrays, so comparing the *clone* (the old behavior) could
+    // never short-circuit for a non-primitive value even when the exact
+    // same reference was passed again unchanged — every "no-op" set of an
+    // object/array value still bumped the version, re-broadcast to every
+    // other tab, and re-notified local subscribers.
+    if (Object.is(this.#value, newValue)) return;
 
-    if (Object.is(this.#value, clonedValue)) return;
+    const clonedValue = structuredClone(newValue);
 
     this.#value = clonedValue;
     this.#version++;

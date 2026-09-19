@@ -16,6 +16,17 @@ export class Signal {
   static #batchQueue = new LinkedList();
   /** @type {boolean} */
   static #batching = false;
+  /**
+   * Nesting depth of active `batch()` calls. Needed because `#batchQueue`
+   * is a single shared queue: without tracking depth, an inner `batch()`
+   * call's `finally` block would drain and flush the *entire* queue
+   * (including updates queued by an outer, still-in-progress `batch()`)
+   * as soon as the inner call finishes, instead of waiting for the
+   * outermost `batch()` to complete. Only the outermost call may flip
+   * `#batching` back off and flush the queue.
+   * @type {number}
+   */
+  static #batchDepth = 0;
   /** @type {object | null} */
   #scope = null;
 
@@ -192,15 +203,23 @@ export class Signal {
    * @returns {Promise<void>}
    */
   static async batch(fn) {
+    Signal.#batchDepth++;
     try {
       Signal.#batching = true;
       await fn();
     } finally {
-      Signal.#batching = false;
-      // Process all queued updates
-      const signals = Signal.#batchQueue.toArray();
-      Signal.#batchQueue.clear();
-      await Promise.all(signals.map((signal) => signal._notify()));
+      Signal.#batchDepth--;
+      // Only the outermost batch() call flushes: a nested batch() call
+      // finishing must NOT flip #batching off or drain #batchQueue, since
+      // the still-in-progress outer batch (and the shared queue) owns
+      // updates queued both before and after the nested call.
+      if (Signal.#batchDepth === 0) {
+        Signal.#batching = false;
+        // Process all queued updates
+        const signals = Signal.#batchQueue.toArray();
+        Signal.#batchQueue.clear();
+        await Promise.all(signals.map((signal) => signal._notify()));
+      }
     }
   }
 
@@ -236,8 +255,21 @@ export class Computed extends Signal {
   #computePromise = null;
   /** @type {LinkedList<() => boolean>} */
   #depUnsubscribes = new LinkedList();
-  /** @type {number} */
-  #lastVersion = -1;
+  /**
+   * Last-seen version number for each dependency, indexed to match `#deps`.
+   * Tracked per-dependency (NOT collapsed into a single scalar) because a
+   * single `Math.max(...)` of all dep versions is unsound: two independent
+   * dependencies' version counters can (and routinely do, since every
+   * signal starts at version 0 and increments by 1 per change) land on the
+   * same number. A shared scalar "high water mark" then can't tell "dep A
+   * is still on the version I've already seen" apart from "dep A's newest
+   * version happens to numerically equal what I recorded for dep B" — so a
+   * genuine update to A gets silently swallowed whenever it happens to
+   * coincide with (or trail behind, in version-number terms) an update
+   * already recorded for B. See the diamond-dependency regression test.
+   * @type {number[]}
+   */
+  #depVersions;
   /** @type {boolean} */
   #initialized = false;
 
@@ -250,6 +282,7 @@ export class Computed extends Signal {
     super(undefined, scope);
     this.#deps = Array.isArray(deps) ? deps : [deps];
     this.#compute = computeFn;
+    this.#depVersions = this.#deps.map(() => -1);
 
     // Set up dependencies
     for (const dep of this.#deps) {
@@ -258,34 +291,70 @@ export class Computed extends Signal {
     }
 
     // Initial computation
-    this.#computePromise = this.recompute();
+    this.recompute();
   }
 
-  /** 
-   * Recompute the value if dependencies have changed
-   * @returns {Promise<void>} 
+  /**
+   * Recompute the value if dependencies have changed.
+   *
+   * This is a thin serializing wrapper around #recomputeOnce(): it waits
+   * for any already-in-flight computation, then registers its OWN
+   * computation as the new "in flight" one *before* doing any real work
+   * (synchronously, so no other concurrent call can slip in between).
+   * This matters because two dependencies can each notify a shared
+   * `Computed` at nearly the same time (e.g. a diamond dependency graph,
+   * or two deps settling their own async computations back to back).
+   * Without this serialization, two overlapping `#recomputeOnce()` calls
+   * could each read `#cleanup` before the other has written its own new
+   * cleanup function, so the first call's cleanup reference gets silently
+   * clobbered (never invoked) by the second — leaking whatever resource
+   * it represented. Serializing means the second call's `#recomputeOnce()`
+   * only starts after the first's cleanup handling has fully completed.
+   * @returns {Promise<void>}
    */
   async recompute() {
-    // Wait for any pending computation to complete
     if (this.#computePromise) {
       await this.#computePromise;
     }
+    const run = this.#recomputeOnce();
+    this.#computePromise = run;
+    try {
+      await run;
+    } finally {
+      if (this.#computePromise === run) {
+        this.#computePromise = null;
+      }
+    }
+  }
 
-    // Check if any dependencies have changed by comparing versions
+  /**
+   * Perform a single (non-serialized) recompute pass. Only ever called
+   * from `recompute()`, which guarantees at most one of these runs at a
+   * time for a given `Computed` instance.
+   * @returns {Promise<void>}
+   */
+  async #recomputeOnce() {
+    // Check if any dependencies have changed by comparing each dependency's
+    // current version against the version we last computed *that specific
+    // dependency* against (not a single collapsed max — see #depVersions).
     let needsUpdate = false;
-    for (const dep of this.#deps) {
-      if (dep instanceof Signal && dep.version > this.#lastVersion) {
+    for (let i = 0; i < this.#deps.length; i++) {
+      const dep = this.#deps[i];
+      if (dep instanceof Signal && dep.version > this.#depVersions[i]) {
         needsUpdate = true;
         break;
       }
     }
 
-    if (!needsUpdate && this.#lastVersion !== -1) {
+    if (!needsUpdate && this.#initialized) {
       return;
     }
 
-    // Update the last version we computed with
-    this.#lastVersion = Math.max(...this.#deps.map(dep => dep instanceof Signal ? dep.version : 0));
+    // Record the version we're computing each dependency against.
+    for (let i = 0; i < this.#deps.length; i++) {
+      const dep = this.#deps[i];
+      this.#depVersions[i] = dep instanceof Signal ? dep.version : 0;
+    }
 
     // Clean up previous computation if needed
     if (this.#cleanup) {
@@ -337,6 +406,19 @@ export class Computed extends Signal {
   }
 
   /**
+   * Computed signals are derived, read-only state: `update()` (inherited
+   * from Signal) would otherwise bypass the `set value` guard above — it
+   * writes `#value`/`#version` directly and never goes through
+   * `recompute()` — silently corrupting the computed's dependency-tracking
+   * state (and, if called after `dispose()`, resurrecting a supposedly
+   * torn-down computed, re-notifying stale subscribers).
+   * @param {(oldValue: T) => T} _fn
+   */
+  update(_fn) {
+    throw new Error("Cannot modify computed signal directly");
+  }
+
+  /**
    * Clean up this computed signal and remove all subscriptions
    */
   dispose() {
@@ -355,6 +437,11 @@ export class Computed extends Signal {
       }
       this.#cleanup = null;
     }
+
+    // Clear this computed's own effects/computedDeps (Signal#dispose). Without
+    // this, subscribers added via subscribe() before dispose() are never
+    // released, and stay reachable/callable for the lifetime of the instance.
+    super.dispose();
   }
 
   [Symbol.dispose]() {

@@ -11,6 +11,15 @@ export class SignalScope {
   batchQueue = new LinkedList();
   /** @type {boolean} */
   batching = false;
+  /**
+   * Nesting depth of active batch() calls on this scope. See the matching
+   * `Signal.#batchDepth` field in signal.mjs for why this is needed: a
+   * single shared `batchQueue` means a nested batch() call's `finally`
+   * must not flush it (or reset `batching`) until the outermost call
+   * on this scope completes.
+   * @type {number}
+   */
+  #batchDepth = 0;
   /** @type {((signal: Signal<any>) => void) | null} */
   trackSignalAccess = null;
   /** @type {Set<Function>} */
@@ -97,14 +106,18 @@ export class SignalScope {
    * @returns {Promise<void>}
    */
   async batch(fn) {
+    this.#batchDepth++;
     try {
       this.batching = true;
       await fn();
     } finally {
-      this.batching = false;
-      const signals = this.batchQueue.toArray();
-      this.batchQueue.clear();
-      await Promise.all(signals.map((s) => s._notify()));
+      this.#batchDepth--;
+      if (this.#batchDepth === 0) {
+        this.batching = false;
+        const signals = this.batchQueue.toArray();
+        this.batchQueue.clear();
+        await Promise.all(signals.map((s) => s._notify()));
+      }
     }
   }
 

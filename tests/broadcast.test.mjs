@@ -65,9 +65,10 @@ test('createBroadcastSignal: setting a value updates it locally and notifies sub
 });
 
 test('createBroadcastSignal: setting the same value again is a no-op', () => {
-  // Note: the value is compared with Object.is *after* structuredClone(), so
-  // this only short-circuits for primitives — structuredClone always returns
-  // a fresh reference for objects, so object values never compare equal here.
+  // Note: Object.is is checked against the raw incoming value *before*
+  // structuredClone() runs (see the "same object reference" test below for
+  // the object/array case). For primitives this is straightforward since
+  // there's no reference identity to worry about.
   const sig = createBroadcastSignal(1, 'test-no-op');
   const seen = [];
   sig.subscribe((value) => seen.push(value));
@@ -76,6 +77,27 @@ test('createBroadcastSignal: setting the same value again is a no-op', () => {
 
   // Only the initial subscribe call should have fired.
   assert.equal(seen.length, 1, 'Setting an Object.is-equal primitive value should not notify again');
+
+  sig.dispose();
+});
+
+test('createBroadcastSignal: setting the same object reference again is a no-op', () => {
+  // Regression test for a real bug: the equality check compared
+  // `structuredClone(newValue)` against the current value, but
+  // structuredClone() always returns a fresh reference for objects/arrays —
+  // so even re-assigning the *exact same, unchanged* object reference could
+  // never short-circuit. Every such "no-op" set still bumped the version,
+  // re-broadcast to other tabs, and re-notified local subscribers. The fix
+  // compares the raw incoming value (before cloning) against the current
+  // value.
+  const sig = createBroadcastSignal({ a: 1 }, 'test-object-no-op');
+  const seen = [];
+  sig.subscribe((value) => seen.push(value));
+
+  const sameRef = sig.value;
+  sig.value = sameRef; // Object.is-equal reference, unchanged
+
+  assert.equal(seen.length, 1, 'Re-setting the same object reference unchanged should not notify again');
 
   sig.dispose();
 });
