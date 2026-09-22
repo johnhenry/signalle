@@ -1,9 +1,30 @@
 # Signalle
 
 [![npm version](https://img.shields.io/npm/v/signalle.svg)](https://www.npmjs.com/package/signalle)
+[![CI](https://github.com/johnhenry/signalle/actions/workflows/ci.yml/badge.svg)](https://github.com/johnhenry/signalle/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/signalle.svg)](LICENSE)
 
+Full documentation: [opensource.johnhenry.me/signalle](https://opensource.johnhenry.me/signalle/)
+
 A beautiful, modern JavaScript signals library with optional DOM integration. Signalle provides fine-grained reactivity with a simple, intuitive API inspired by the best features of existing signal implementations.
+
+> **Note:** Published on npm as unscoped `signalle` (not yet moved into the `@johnhenry` scope).
+
+## Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core API](#core-api)
+- [DOM Integration](#dom-integration)
+- [Server-Side Streaming](#server-side-streaming)
+- [Scoped Signals](#scoped-signals)
+- [Broadcast Signals](#broadcast-signals)
+- [Exports](#exports)
+- [Architecture](#architecture)
+- [Security model](#security-model)
+- [Family](#family)
+- [License](#license)
 
 ## Features
 
@@ -316,44 +337,81 @@ Signalle is built with performance and simplicity in mind. Key architectural dec
 
 ## Security model
 
-`generateWorkerCode(signalCode, name?)` (in `signalle/broadcast`) does not
-parse, sandbox, or validate `signalCode` in any way. It is plain string
-interpolation into a JS source string:
+`generateWorkerCode(signalCode, name?)` (in `signalle/broadcast`) is the one
+part of signalle that is eval-adjacent. Read this before passing it
+anything you didn't write yourself.
 
-```js
-export function generateWorkerCode(signalCode, name = "createBroadcastSignal") {
-  return `
-    ${BroadcastSignal.toString()}
-    const ${name} = ${createBroadcastSignal.toString()};
-    ${signalCode}
-    `;
-}
-```
+**What signalle guarantees:**
 
-Whatever `signalCode` contains becomes the literal body of the generated
-script, which the README's own usage example then runs by wrapping it in a
-`Blob` and handing it to `new Worker(URL.createObjectURL(blob))`. There is
-no intermediate evaluation step and no capability restriction — this is
-equivalent to `eval()`, just with an extra Worker/Blob indirection on top.
+- **Every other export is plain data-flow code with no code generation or
+  dynamic evaluation.** `signal()`, `computed()`, `effect()`,
+  `createEffect()`, `batch()`, `untrack()`, the DOM bindings, the SSE stream
+  helpers, and `createScope()` never construct or execute a string as code.
+  The security surface described below is scoped to `generateWorkerCode()`
+  alone.
+- **The generated Worker gets you what any Worker gets you: no DOM access.**
+  Workers are inherently isolated from the document — this is a platform
+  property, not something `generateWorkerCode()` adds.
+- **`scope.createEffect()` keeps one scope's auto-tracking from corrupting
+  another's.** Each `SignalScope` has its own tracker state, so multiple
+  scopes' effects — even interleaved within the same event-loop tick — never
+  clobber each other's dependency tracking (see the warning above; the
+  top-level `createEffect` does not have this guarantee and must not be
+  used as an isolation boundary between scopes).
 
-What that Worker gets you, same as any Worker:
+**What is still yours:**
 
-- **No DOM access** — Workers are inherently isolated from the document.
-- Nothing else. Unlike a sandbox, nothing here restricts what the
-  generated code can call once it's running: `fetch`, `WebSocket`,
-  `importScripts`, `indexedDB`, nested `Worker`s, and `postMessage` back to
-  the page that created it are all directly reachable from inside
-  `signalCode`, because `generateWorkerCode()` performs zero capability
-  gating — it only concatenates strings.
+- **`generateWorkerCode()` does not parse, sandbox, or validate `signalCode`
+  in any way.** It is plain string interpolation into a JS source string:
 
-What this means in practice:
+  ```js
+  export function generateWorkerCode(signalCode, name = "createBroadcastSignal") {
+    return `
+      ${BroadcastSignal.toString()}
+      const ${name} = ${createBroadcastSignal.toString()};
+      ${signalCode}
+      `;
+  }
+  ```
 
-- **Never pass untrusted or user-supplied input into `generateWorkerCode()`,** whether as the whole `signalCode` argument or interpolated into it (e.g. building the string from a URL parameter, a database value, or anything else an attacker could influence). Doing so is arbitrary code execution in that Worker's context, with network and storage access, and a live channel back to the page via `postMessage`.
-- `name` is interpolated the same way (`const ${name} = ...`) — treat it as a fixed identifier you choose in code, not as a value derived from external input.
-- `generateWorkerCode()` is meant for splicing together developer-authored strings/templates at build- or call-time (the documented use case: shipping a bundler-free worker script), not for running code whose content you don't already control.
+  Whatever `signalCode` contains becomes the literal body of the generated
+  script, which the README's own usage example then runs by wrapping it in
+  a `Blob` and handing it to `new Worker(URL.createObjectURL(blob))`. There
+  is no intermediate evaluation step and no capability restriction — this
+  is equivalent to `eval()`, just with an extra Worker/Blob indirection on
+  top. Once that Worker is running, nothing here restricts what the
+  generated code can call: `fetch`, `WebSocket`, `importScripts`,
+  `indexedDB`, nested `Worker`s, and `postMessage` back to the page that
+  created it are all directly reachable from inside `signalCode`, because
+  `generateWorkerCode()` performs zero capability gating — it only
+  concatenates strings.
+- **Never pass untrusted or user-supplied input into `generateWorkerCode()`,**
+  whether as the whole `signalCode` argument or interpolated into it (e.g.
+  building the string from a URL parameter, a database value, or anything
+  else an attacker could influence). Doing so is arbitrary code execution in
+  that Worker's context, with network and storage access, and a live
+  channel back to the page via `postMessage`.
+- **`name` is interpolated the same way** (`const ${name} = ...`) — treat it
+  as a fixed identifier you choose in code, not as a value derived from
+  external input.
+- **`generateWorkerCode()` is meant for splicing together developer-authored
+  strings/templates** at build- or call-time (the documented use case:
+  shipping a bundler-free worker script), not for running code whose
+  content you don't already control. If you need to run code you don't
+  fully trust, this function is the wrong tool — reach for a real
+  sandboxing layer instead (see [Family](#family)).
 
-If you need to run code you don't fully trust, this function is the wrong
-tool — reach for a real sandboxing layer (e.g. [`@johnhenry/andbox`](https://github.com/johnhenry/andbox), which documents its own, narrower set of guarantees and gaps) instead of `generateWorkerCode()`.
+## Family
+
+signalle doesn't consume or produce artifacts for any other `@johnhenry/*`
+package — it's a standalone reactive-signals library. The one
+cross-reference that exists in this README is a pointer, not a dependency:
+
+- **[`@johnhenry/andbox`](https://github.com/johnhenry/andbox)** — referenced
+  from [Security model](#security-model) above as the tool to reach for if
+  you need to run code you don't trust. `generateWorkerCode()` here performs
+  zero sandboxing of its own; andbox documents its own, narrower set of
+  guarantees and gaps for that job.
 
 ## License
 
