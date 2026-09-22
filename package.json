@@ -1,5 +1,5 @@
 {
-  "name": "signalle",
+  "name": "@johnhenry/signalle",
   "version": "0.1.0",
   "description": "Beautiful, modern signals with optional DOM integration",
   "type": "module",
@@ -58,6 +58,9 @@
   },
   "engines": {
     "node": ">=26.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "repository": {
     "type": "git",

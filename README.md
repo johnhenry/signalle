@@ -38,13 +38,16 @@ A beautiful, modern JavaScript signals library with optional DOM integration. Si
 ## Installation
 
 ```bash
-npm install signalle
+npm install @johnhenry/signalle
 ```
+
+> **Provenance:** first published under this name — `signalle` had never
+> been published to npm under any name before `0.1.0`.
 
 ## Quick Start
 
 ```javascript
-import { signal, computed, effect } from 'signalle';
+import { signal, computed, effect } from '@johnhenry/signalle';
 
 // Create a signal with an initial value
 const count = signal(0);
@@ -166,8 +169,8 @@ createEffect(() => {
 Signalle includes optional DOM bindings to easily connect signals to the DOM.
 
 ```javascript
-import { signal } from 'signalle';
-import { bind, bindAttribute, bindClass } from 'signalle/dom';
+import { signal } from '@johnhenry/signalle';
+import { bind, bindAttribute, bindClass } from '@johnhenry/signalle/dom';
 
 // Create a two-way binding with an input element
 const nameInput = document.querySelector('#name-input');
@@ -200,8 +203,8 @@ bindClass(document.body, 'dark-theme', themeToggle);
 ## Server-Side Streaming
 
 ```js
-import { signal } from 'signalle';
-import { toSSEResponse } from 'signalle/stream';
+import { signal } from '@johnhenry/signalle';
+import { toSSEResponse } from '@johnhenry/signalle/stream';
 
 const feed = signal({ count: 0 });
 
@@ -231,7 +234,7 @@ The lower-level primitive behind `toSSEResponse`: converts a signal into a plain
 ## Scoped Signals
 
 ```js
-import { createScope } from 'signalle/scope';
+import { createScope } from '@johnhenry/signalle/scope';
 
 const scope = createScope();
 
@@ -272,7 +275,7 @@ Use **`scope.createEffect(fn)`** instead whenever you need auto-tracking inside 
 Signals that stay in sync across browser tabs, iframes, or workers via `BroadcastChannel`.
 
 ```js
-import { createBroadcastSignal } from 'signalle/broadcast';
+import { createBroadcastSignal } from '@johnhenry/signalle/broadcast';
 
 // Every `createBroadcastSignal(initial, channelName)` call that shares the
 // same channel name — in any tab, iframe, or worker — stays in sync.
@@ -304,7 +307,7 @@ Returns an object with `value` (get/set), `subscribe(fn)`, and `dispose()`.
 Generates a self-contained string of worker code that embeds the `BroadcastSignal` implementation plus a `createBroadcastSignal`-equivalent factory (bound to `name`, default `'createBroadcastSignal'`), so it can be dropped into a `Worker`/`Blob` URL without a bundler:
 
 ```js
-import { generateWorkerCode } from 'signalle/broadcast';
+import { generateWorkerCode } from '@johnhenry/signalle/broadcast';
 
 const workerCode = generateWorkerCode(`
   const sharedCount = createBroadcastSignal(0, 'shared-count');
