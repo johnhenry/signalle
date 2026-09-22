@@ -1,4 +1,4 @@
-declare module 'signalle' {
+declare module '@johnhenry/signalle' {
   /**
    * A signal that holds a value and notifies subscribers when it changes
    */
@@ -126,8 +126,8 @@ declare module 'signalle' {
   export function untrack<R>(fn: () => R): R;
 }
 
-declare module 'signalle/dom' {
-  import { Signal, Computed } from 'signalle';
+declare module '@johnhenry/signalle/dom' {
+  import { Signal, Computed } from '@johnhenry/signalle';
 
   /**
    * Shape of the options object accepted by `bind`, `bindAll`, and
@@ -255,8 +255,8 @@ declare module 'signalle/dom' {
   ): Signal<Array<T & { id: string | number }>>;
 }
 
-declare module 'signalle/stream' {
-  import { Signal } from 'signalle';
+declare module '@johnhenry/signalle/stream' {
+  import { Signal } from '@johnhenry/signalle';
 
   /**
    * Options shared by `toReadableStream` and `toSSEResponse`.
@@ -297,8 +297,8 @@ declare module 'signalle/stream' {
   ): Response;
 }
 
-declare module 'signalle/scope' {
-  import { Signal, Computed } from 'signalle';
+declare module '@johnhenry/signalle/scope' {
+  import { Signal, Computed } from '@johnhenry/signalle';
 
   /**
    * An isolated signal scope with its own batch queue and dependency
@@ -377,7 +377,7 @@ declare module 'signalle/scope' {
   export function createScope(): ScopeHandle;
 }
 
-declare module 'signalle/broadcast' {
+declare module '@johnhenry/signalle/broadcast' {
   /**
    * A signal that synchronizes its value across browser tabs, iframes, or
    * workers via `BroadcastChannel`.
