@@ -389,6 +389,24 @@ test('Computed: overlapping recomputes do not clobber a pending [value, cleanup]
 
   d.value = 5;
 
+  // Give the whole chain (b and c's 10ms computes in parallel, then a's own
+  // 5ms compute on top -- nominally ~15ms) time to fully settle before
+  // sampling for stability below, the same way the diamond-dependency test
+  // above does. Without this, the polling loop's first two 20ms-apart
+  // samples can both land on the STALE pre-update value (5) and the loop
+  // exits believing that's the converged answer -- not because of a race in
+  // the signal library (recompute() correctly serializes and always
+  // eventually lands on 25; confirmed by waiting well past this point), but
+  // because "two consecutive equal samples 20ms apart" only proves
+  // stability if 20ms safely exceeds the real end-to-end propagation delay.
+  // That held on ubuntu-latest's fine-grained timers but not on
+  // windows-latest, whose default `setTimeout` resolution is only accurate
+  // to ~15.6ms: two chained hops (the parallel b/c leg, then a's own leg)
+  // can each round up to a full tick, pushing the real settle time to
+  // ~30ms+ -- past the poll window -- and making the test misreport the
+  // last-observed-but-still-stale value as final. See CHANGELOG.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
   let value;
   do {
     value = a.value;
