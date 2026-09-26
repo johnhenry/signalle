@@ -1,30 +1,30 @@
 {
   "name": "@johnhenry/signalle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Beautiful, modern signals with optional DOM integration",
   "type": "module",
   "main": "dist/index.mjs",
   "types": "dist/types.d.ts",
   "exports": {
     ".": {
-      "types": "./src/types.d.ts",
-      "import": "./src/index.mjs"
+      "types": "./dist/types.d.ts",
+      "import": "./dist/index.mjs"
     },
     "./dom": {
-      "types": "./src/types.d.ts",
-      "import": "./src/dom.mjs"
+      "types": "./dist/types.d.ts",
+      "import": "./dist/dom.mjs"
     },
     "./stream": {
-      "types": "./src/types.d.ts",
-      "import": "./src/stream.mjs"
+      "types": "./dist/types.d.ts",
+      "import": "./dist/stream.mjs"
     },
     "./scope": {
-      "types": "./src/types.d.ts",
-      "import": "./src/scope.mjs"
+      "types": "./dist/types.d.ts",
+      "import": "./dist/scope.mjs"
     },
     "./broadcast": {
-      "types": "./src/types.d.ts",
-      "import": "./src/broadcast.mjs"
+      "types": "./dist/types.d.ts",
+      "import": "./dist/broadcast.mjs"
     }
   },
   "files": [
