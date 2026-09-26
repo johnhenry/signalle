@@ -61,16 +61,14 @@ export class Signal {
     return this.#value;
   }
 
-  /** 
+  /**
    * Set a new value for the signal
-   * @param {T} newValue 
+   * @param {T} newValue
    */
   set value(newValue) {
-    if (Object.is(this.#value, newValue)) return;
-
-    this.#value = newValue;
-    this.#version++;
-    void this._notify();
+    if (this._setValue(newValue)) {
+      void this._notify();
+    }
   }
 
   /**
@@ -95,11 +93,28 @@ export class Signal {
    */
   update(fn) {
     const newValue = fn(this.#value);
-    if (Object.is(this.#value, newValue)) return;
+    if (this._setValue(newValue)) {
+      void this._notify();
+    }
+  }
 
+  /**
+   * Write `newValue` into this signal's storage (bumping `#version`) WITHOUT
+   * triggering propagation (`_notify()`). Used both by the public
+   * `value`/`update()` mutators above (which immediately follow up with
+   * `_notify()`) and by `Computed#recompute()` (which intentionally defers
+   * notification to its caller -- see `runPropagationWave` below -- so that
+   * a single coordinated pass can propagate to dependents exactly once
+   * instead of each dependency change triggering its own independent
+   * cascade).
+   * @param {T} newValue
+   * @returns {boolean} Whether the value actually changed.
+   */
+  _setValue(newValue) {
+    if (Object.is(this.#value, newValue)) return false;
     this.#value = newValue;
     this.#version++;
-    void this._notify();
+    return true;
   }
 
   /**
@@ -136,7 +151,55 @@ export class Signal {
   }
 
   /**
-   * Notify all subscribers of a change (also called from scope.batch)
+   * Invoke `cb` once for each Computed that directly depends on this node.
+   * Used by `runPropagationWave` to discover which Computeds a changed
+   * node needs to (transitively) dirty -- kept as a narrow accessor rather
+   * than exposing `#computedDeps` itself, matching the existing `_addEffect`
+   * / `addComputedDep` convention of underscore-prefixed internal hooks.
+   * @param {(computed: Computed<any>) => void} cb
+   */
+  _forEachComputedDep(cb) {
+    this.#computedDeps.forEach(cb);
+  }
+
+  /**
+   * Run every effect subscriber of this node with its current value, in
+   * parallel, resolving once they've all settled.
+   * @returns {Promise<void>}
+   */
+  _fireEffects() {
+    const effectPromises = [];
+    this.#effects.forEach((effectFn) => {
+      effectPromises.push(effectFn(this.#value));
+    });
+    return Promise.all(effectPromises);
+  }
+
+  /**
+   * Notify dependents of a change (also called from scope.batch's flush).
+   *
+   * When called while an outer `batch()` is active, this just enqueues
+   * `this` for that batch's eventual flush (unchanged from before). When
+   * called outside of an explicit batch, it used to eagerly recompute this
+   * node's *direct* computed dependents right here, one `_notify()` call at
+   * a time. That was the root cause of
+   * https://github.com/johnhenry/signalle/issues/7: a Computed with more
+   * than one changed dependency (whether those are raw Signals written in
+   * the same batch(), or other Computeds that each independently finish
+   * settling at different times) got `recompute()` invoked once per
+   * dependency that changed, instead of once for the whole wave -- and,
+   * worse, because each of those eager recomputes ran with whatever subset
+   * of dependencies had settled *so far*, a downstream Computed's effects
+   * could observe a transient, wrong intermediate total (see the
+   * "propagation wave" regression test) even though the *final* value
+   * converged correctly.
+   *
+   * Now, a non-batched change instead starts (or joins) a single
+   * `runPropagationWave`, which marks dependents dirty without eagerly
+   * recomputing them, then drains that dirty set in dependency order so
+   * each affected Computed recomputes exactly once, with all of its own
+   * affected dependencies already settled -- see `runPropagationWave` below
+   * for the full algorithm.
    * @returns {Promise<void>}
    */
   async _notify() {
@@ -149,19 +212,7 @@ export class Signal {
       return;
     }
 
-    // Update computed signals first
-    const computedPromises = [];
-    this.#computedDeps.forEach((computed) => {
-      computedPromises.push(computed.recompute());
-    });
-    await Promise.all(computedPromises);
-
-    // Then notify effect subscribers
-    const effectPromises = [];
-    this.#effects.forEach((effect) => {
-      effectPromises.push(effect(this.#value));
-    });
-    await Promise.all(effectPromises);
+    await runPropagationWave([this]);
   }
 
   /**
@@ -215,10 +266,14 @@ export class Signal {
       // updates queued both before and after the nested call.
       if (Signal.#batchDepth === 0) {
         Signal.#batching = false;
-        // Process all queued updates
+        // Process all queued updates as a single coordinated propagation
+        // wave (see `runPropagationWave`) rather than firing each queued
+        // signal's `_notify()` independently -- the latter is what let a
+        // computed depending on more than one signal written in this batch
+        // recompute once per changed input instead of once total.
         const signals = Signal.#batchQueue.toArray();
         Signal.#batchQueue.clear();
-        await Promise.all(signals.map((signal) => signal._notify()));
+        await runPropagationWave(signals);
       }
     }
   }
@@ -290,8 +345,16 @@ export class Computed extends Signal {
       this.#depUnsubscribes.add(unsubscribe);
     }
 
-    // Initial computation
-    this.recompute();
+    // Initial computation. `recompute()` itself no longer self-notifies
+    // (see below) -- it just settles `#value`/`#version` and reports
+    // whether the value changed, leaving propagation to whichever caller
+    // is coordinating a wave. There are no dependents yet at construction
+    // time (nothing has had the chance to depend on `this`), so once the
+    // initial compute settles, fire this computed's own effect subscribers
+    // (added via `subscribe()` before it finished) directly.
+    this.recompute().then((changed) => {
+      if (changed) void this._notify();
+    });
   }
 
   /**
@@ -310,7 +373,15 @@ export class Computed extends Signal {
    * clobbered (never invoked) by the second — leaking whatever resource
    * it represented. Serializing means the second call's `#recomputeOnce()`
    * only starts after the first's cleanup handling has fully completed.
-   * @returns {Promise<void>}
+   *
+   * Deliberately does NOT call `_notify()` itself (unlike a plain
+   * `Signal`'s `value` setter) -- see `runPropagationWave` for why:
+   * recomputing is driven by a coordinated propagation wave that needs to
+   * know, for *every* dirty Computed, whether it actually changed before
+   * deciding what to mark dirty next and what to fire effects for. Letting
+   * this self-notify would reintroduce the eager, once-per-dependency
+   * cascade that issue #7 was filed about.
+   * @returns {Promise<boolean>} Whether the value actually changed.
    */
   async recompute() {
     if (this.#computePromise) {
@@ -319,7 +390,7 @@ export class Computed extends Signal {
     const run = this.#recomputeOnce();
     this.#computePromise = run;
     try {
-      await run;
+      return await run;
     } finally {
       if (this.#computePromise === run) {
         this.#computePromise = null;
@@ -331,7 +402,7 @@ export class Computed extends Signal {
    * Perform a single (non-serialized) recompute pass. Only ever called
    * from `recompute()`, which guarantees at most one of these runs at a
    * time for a given `Computed` instance.
-   * @returns {Promise<void>}
+   * @returns {Promise<boolean>} Whether the value actually changed.
    */
   async #recomputeOnce() {
     // Check if any dependencies have changed by comparing each dependency's
@@ -347,7 +418,7 @@ export class Computed extends Signal {
     }
 
     if (!needsUpdate && this.#initialized) {
-      return;
+      return false;
     }
 
     // Record the version we're computing each dependency against.
@@ -366,6 +437,7 @@ export class Computed extends Signal {
     const result = await this.#compute(...depValues);
 
     // Handle both array returns [value, cleanup] and direct value returns
+    let changed;
     if (
       Array.isArray(result) &&
       result.length === 2 &&
@@ -373,11 +445,25 @@ export class Computed extends Signal {
     ) {
       const [newValue, cleanup] = result;
       this.#cleanup = cleanup;
-      super.value = newValue;
+      changed = this._setValue(newValue);
     } else {
-      super.value = result;
+      changed = this._setValue(result);
     }
     this.#initialized = true;
+    return changed;
+  }
+
+  /**
+   * This computed's own dependencies (a mix of plain Signals and/or other
+   * Computeds). Used by `runPropagationWave` to decide whether this
+   * Computed is safe to recompute yet -- it must wait until none of its
+   * OWN dependencies that are themselves dirty in the current wave remain
+   * unsettled, so it always reads fresh, final values rather than a
+   * transient partial update.
+   * @returns {Signal<any>[]}
+   */
+  _getDependencies() {
+    return this.#deps;
   }
 
   /**
@@ -447,6 +533,87 @@ export class Computed extends Signal {
   [Symbol.dispose]() {
     this.dispose();
   }
+}
+
+/**
+ * Run one coordinated propagation wave triggered by `rootNodes` -- Signals
+ * and/or Computeds whose value has just changed (either because an
+ * explicit `batch()` just flushed, or because a single non-batched write
+ * changed a Signal outside of any batch). Shared by both `Signal.batch()`
+ * and `SignalScope#batch()`'s flush, and by `Signal#_notify()` /
+ * `SignalScope`'s non-batched path, since the propagation algorithm itself
+ * doesn't depend on scoping -- only *when* a wave starts is scope/batching
+ * specific, not *how* it drains.
+ *
+ * This is the fix for
+ * https://github.com/johnhenry/signalle/issues/7 ("batch() still notifies
+ * dependants once per changed signal, causing extra recomputes"): rather
+ * than eagerly calling `computed.recompute()` as soon as any one of its
+ * dependencies reports a change (which made a Computed depending on
+ * several changed inputs recompute once per input, and could even let
+ * effects observe a transient, wrong intermediate total when a Computed's
+ * dependencies are themselves other Computeds settling at different
+ * times -- see the "propagation wave" regression test), this:
+ *
+ *   1. Marks every DIRECT computed dependent of a changed node "dirty"
+ *      without recomputing it yet.
+ *   2. Repeatedly recomputes the wave-front of dirty Computeds whose own
+ *      dependencies are NOT themselves still dirty (i.e. already settled
+ *      for this wave), in parallel, since such a wave-front is mutually
+ *      independent. This is a standard worklist/topological drain: it
+ *      guarantees a Computed only ever recomputes after everything it
+ *      depends on (that's part of this same wave) has already settled, so
+ *      it always reads final values, and it guarantees each dirty Computed
+ *      recomputes AT MOST ONCE for the whole wave.
+ *   3. Once nothing is left dirty, fires every changed node's effect
+ *      subscribers exactly once, in parallel -- after the whole graph has
+ *      settled, never mid-wave.
+ * Exported (not just module-internal) so `SignalScope#batch()` in
+ * scope.mjs can drive its own flush through the exact same algorithm
+ * instead of duplicating it.
+ * @param {(Signal<any>|Computed<any>)[]} rootNodes
+ * @returns {Promise<void>}
+ */
+export async function runPropagationWave(rootNodes) {
+  /** @type {Set<Computed<any>>} */
+  const dirty = new Set();
+  /** @type {Set<Signal<any>|Computed<any>>} */
+  const changed = new Set(rootNodes);
+
+  const markDependentsDirty = (node) => {
+    node._forEachComputedDep((dependent) => dirty.add(dependent));
+  };
+  for (const node of rootNodes) markDependentsDirty(node);
+
+  while (dirty.size > 0) {
+    // The wave-front: every currently-dirty Computed none of whose own
+    // dependencies are themselves still dirty this wave.
+    const ready = [];
+    for (const computed of dirty) {
+      const stillWaitingOn = computed
+        ._getDependencies()
+        .some((dep) => dirty.has(dep));
+      if (!stillWaitingOn) ready.push(computed);
+    }
+    if (ready.length === 0) {
+      // Only reachable with a cyclic dependency graph (not supported);
+      // bail rather than looping forever.
+      break;
+    }
+    for (const computed of ready) dirty.delete(computed);
+
+    await Promise.all(
+      ready.map(async (computed) => {
+        const didChange = await computed.recompute();
+        if (didChange) {
+          changed.add(computed);
+          markDependentsDirty(computed);
+        }
+      })
+    );
+  }
+
+  await Promise.all(Array.from(changed, (node) => node._fireEffects()));
 }
 
 /**

@@ -218,6 +218,19 @@ test('diamond dependency: a computed depending on two computeds sharing a common
 
   d.value = 5;
 
+  // Give both legs of the diamond time to settle before sampling for
+  // stability below. This must exceed `b`'s 30ms delay: since the
+  // propagation-wave fix for issue #7, `a` only recomputes once *both* `b`
+  // and `c` have settled (previously `a` recomputed eagerly the moment
+  // `c` alone settled at ~5ms, producing a wrong intermediate total before
+  // catching up once `b` settled too -- so sampling "has `a.value` changed
+  // in the last 20ms" as early as t=0 used to reliably observe that
+  // intermediate change). Now that `a` jumps straight from the stale value
+  // to the correct one in a single step at ~30ms, sampling has to start
+  // after that step, or it can mistake the still-stale value for a
+  // already-converged one.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
   // Poll until things stop changing, then assert the *correct* converged
   // value — the bug produced a permanently wrong value (8 instead of 25 in
   // one reproduction) because a later dependency update got masked.
@@ -228,6 +241,110 @@ test('diamond dependency: a computed depending on two computeds sharing a common
   } while (a.value !== value);
 
   assert.equal(a.value, 25, 'Diamond must converge to 5*2 + 5*3, not a stale/masked intermediate value');
+});
+
+test('batch(): a computed depending on several signals written in one batch() recomputes exactly once', async (t) => {
+  // Regression test for https://github.com/johnhenry/signalle/issues/7:
+  // "batch() still notifies dependants once per changed signal, causing
+  // extra recomputes". Reported from a real physics-sim showcase (ORRERY):
+  // writing several signals feeding one computed inside a single batch()
+  // per animation frame made that computed recompute multiple times a
+  // frame instead of once.
+  const y = signal(0);
+  const vy = signal(1);
+  const dt = signal(0.016);
+
+  let recomputeCount = 0;
+  const y1 = computed([y, vy, dt], (yv, vyv, dtv) => {
+    recomputeCount++;
+    return yv + vyv * dtv;
+  });
+
+  // Let the initial computation settle before measuring.
+  while (y1.value === undefined) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  recomputeCount = 0;
+
+  await batch(async () => {
+    y.value = 5;
+    vy.value = 2;
+    dt.value = 0.017;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(
+    recomputeCount,
+    1,
+    'A computed depending on 3 signals all written in one batch() must recompute exactly once, not once per changed input'
+  );
+  assert.equal(y1.value, 5 + 2 * 0.017, 'The single recompute must reflect all three writes');
+});
+
+test('propagation wave: a computed whose dependencies are themselves still-settling computeds recomputes exactly once', async (t) => {
+  // Deeper root cause behind issue #7, confirmed by direct investigation
+  // (not just trusting the issue's own diagnosis): the reported symptom —
+  // "y1 = computed(...) feeds bounce = computed(...); ... makes y1
+  // recompute ~2x and bounce ~3x per frame" — does NOT reproduce for a
+  // single computed depending directly on several raw signals changed in
+  // one batch() (see the test above; that case was already deduplicated
+  // by the existing per-dependency version tracking + recompute
+  // serialization). It DOES reproduce, exactly as described, once the
+  // dependency graph has more than one level: two signals written in the
+  // same batch(), each feeding its OWN computed, both of those feeding a
+  // shared downstream computed. Because the two upstream computeds settle
+  // asynchronously at different times (very plausible for any non-trivial
+  // physics/animation compute chain — exactly ORRERY's shape), the
+  // downstream computed used to recompute once per upstream settle event,
+  // AND observe a transient wrong intermediate total in between (see the
+  // `seenValues` assertion below), even though `batch()` itself was
+  // already flushed by the time either upstream computed settled.
+  const d1 = signal(1);
+  const d2 = signal(1);
+
+  const b = computed(d1, async (v) => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return v * 2;
+  });
+  const c = computed(d2, async (v) => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return v * 3;
+  });
+
+  let recomputeCount = 0;
+  const a = computed([b, c], (bv, cv) => {
+    recomputeCount++;
+    return bv + cv;
+  });
+
+  const seenValues = [];
+  effect(a, (v) => { seenValues.push(v); });
+
+  while (a.value !== 5) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  recomputeCount = 0;
+  seenValues.length = 0;
+
+  await batch(async () => {
+    d1.value = 5;
+    d2.value = 5;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  assert.equal(a.value, 25, 'Final value must be correct: 5*2 + 5*3');
+  assert.equal(
+    recomputeCount,
+    1,
+    'A computed depending on two other computeds that settle at different times must recompute exactly once for this wave, not once per upstream settle event'
+  );
+  assert.deepEqual(
+    seenValues,
+    [25],
+    'The effect must only ever observe the final, fully-settled value — never a transient wrong intermediate total (e.g. 17, computed from the fast leg alone before the slow leg settled)'
+  );
 });
 
 test('Computed: overlapping recomputes do not clobber a pending [value, cleanup] side effect', async (t) => {
