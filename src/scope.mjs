@@ -1,5 +1,5 @@
 import { LinkedList } from './linked-list.mjs';
-import { Signal, Computed, effect, createEffectWithTracker } from './signal.mjs';
+import { Signal, Computed, effect, createEffectWithTracker, runPropagationWave } from './signal.mjs';
 
 /**
  * An isolated signal scope with its own batch queue and tracking state.
@@ -114,9 +114,14 @@ export class SignalScope {
       this.#batchDepth--;
       if (this.#batchDepth === 0) {
         this.batching = false;
+        // See `runPropagationWave` in signal.mjs (also fixes
+        // https://github.com/johnhenry/signalle/issues/7 for scoped
+        // batches): flushing via independent `s._notify()` calls per
+        // queued signal let a computed depending on more than one of them
+        // recompute once per changed input instead of once for the batch.
         const signals = this.batchQueue.toArray();
         this.batchQueue.clear();
-        await Promise.all(signals.map((s) => s._notify()));
+        await runPropagationWave(signals);
       }
     }
   }
