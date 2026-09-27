@@ -149,6 +149,73 @@ test('createBroadcastSignal: signals on different channel names do not interfere
   b.dispose();
 });
 
+test('createBroadcastSignal: a late-joining signal syncs to the current value instead of starting stale', async () => {
+  // Regression test for a real bug (#9): each instance used to track its
+  // own version counter starting at 0, with no way for a newly-created
+  // instance to learn what version/value peers that were already
+  // broadcasting had reached. A tab opened after others had already
+  // written several times would start from its own local initial value
+  // and never catch up -- and its own subsequent writes, still counted
+  // from its own low version number, would be ignored by the already-
+  // ahead peers, so the two views diverged permanently.
+  const a = createBroadcastSignal(0, 'test-late-join');
+  a.value = 1;
+  a.value = 2;
+  a.value = 3;
+
+  // C joins the channel well after A has already written three times,
+  // with a totally different initial value of its own.
+  const c = createBroadcastSignal(-1, 'test-late-join');
+  const seen = [];
+  c.subscribe((value) => seen.push(value));
+
+  // BroadcastChannel delivery (and the sync-request/state round trip) is
+  // asynchronous even within a single process.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(
+    c.value,
+    3,
+    'Late-joining signal should adopt the current value from the already-broadcasting peer instead of staying at its own stale initial value'
+  );
+
+  // The late joiner's own next write must also be accepted by the
+  // pre-existing peer -- this was the second half of the bug: a
+  // newcomer's version counter used to restart at 0/1, which a peer
+  // already at version 3 would simply ignore as "not newer."
+  c.value = 99;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(
+    a.value,
+    99,
+    "Late joiner's write should be accepted by the pre-existing peer once it has caught up"
+  );
+
+  a.dispose();
+  c.dispose();
+});
+
+test('createBroadcastSignal: three instances all converge regardless of join order', async () => {
+  const a = createBroadcastSignal('a-initial', 'test-three-way-join');
+  a.value = 'first';
+  a.value = 'second';
+
+  const b = createBroadcastSignal('b-initial', 'test-three-way-join');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const c = createBroadcastSignal('c-initial', 'test-three-way-join');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(a.value, 'second');
+  assert.equal(b.value, 'second', 'B should have caught up to the value A had already reached before B joined');
+  assert.equal(c.value, 'second', 'C should have caught up even though it joined after both A and B');
+
+  a.dispose();
+  b.dispose();
+  c.dispose();
+});
+
 test('createBroadcastSignal: dispose() clears effects and closes the channel', () => {
   const sig = createBroadcastSignal(0, 'test-dispose');
   const seen = [];

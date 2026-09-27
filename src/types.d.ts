@@ -271,16 +271,18 @@ declare module '@johnhenry/signalle/stream' {
   }
 
   /**
-   * Convert a signal into a ReadableStream that emits SSE-formatted strings
-   * every time the signal's value changes.
+   * Convert a signal into a ReadableStream that emits SSE-formatted chunks
+   * every time the signal's value changes. Chunks are UTF-8-encoded
+   * `Uint8Array`s (not strings) since that's what the `ReadableStream`/
+   * `Response` body contract requires.
    * @param sig The signal to observe
    * @param options Stream formatting options
-   * @returns A ReadableStream of SSE-formatted string chunks
+   * @returns A ReadableStream of SSE-formatted, UTF-8-encoded byte chunks
    */
   export function toReadableStream<T>(
     sig: Signal<T>,
     options?: ToStreamOptions<T>
-  ): ReadableStream<string>;
+  ): ReadableStream<Uint8Array>;
 
   /**
    * Convert a signal into a ready-to-send Server-Sent Events Response.

@@ -1,7 +1,13 @@
 import { effect } from './signal.mjs';
 
+const textEncoder = new TextEncoder();
+
 /**
- * Convert a signal into a ReadableStream that emits SSE-formatted strings.
+ * Convert a signal into a ReadableStream that emits SSE-formatted chunks as
+ * `Uint8Array`s, per the `ReadableStream`/`Response` body contract (a
+ * `Response` body stream must yield bytes, not strings -- enqueueing a raw
+ * string throws `TypeError: Received non-Uint8Array chunk` the moment a
+ * consumer reads it, e.g. via `res.text()` or by iterating the reader).
  *
  * @template T
  * @param {import('./signal.mjs').Signal<T>} sig - The signal to observe
@@ -9,7 +15,7 @@ import { effect } from './signal.mjs';
  * @param {(value: T) => string} [options.transform] - Transform value before sending (default: JSON.stringify)
  * @param {string} [options.event] - SSE event name (omit for default event)
  * @param {boolean} [options.sendInitial=true] - Whether to send the initial value
- * @returns {ReadableStream<string>}
+ * @returns {ReadableStream<Uint8Array>}
  */
 export const toReadableStream = (sig, options = {}) => {
   const {
@@ -37,7 +43,7 @@ export const toReadableStream = (sig, options = {}) => {
         chunk += `data: ${transform(value)}\n\n`;
 
         try {
-          controller.enqueue(chunk);
+          controller.enqueue(textEncoder.encode(chunk));
         } catch {
           // Stream already closed
         }

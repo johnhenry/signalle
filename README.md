@@ -229,7 +229,7 @@ Creates a Server-Sent Events Response from a signal. The stream pushes a new SSE
 
 ### `toReadableStream(signal, options?)`
 
-The lower-level primitive behind `toSSEResponse`: converts a signal into a plain `ReadableStream<string>` of SSE-formatted chunks, for cases where you need the stream itself rather than a full `Response`.
+The lower-level primitive behind `toSSEResponse`: converts a signal into a `ReadableStream<Uint8Array>` of UTF-8-encoded, SSE-formatted chunks, for cases where you need the stream itself rather than a full `Response`. Chunks are bytes, not strings — a `Response`/`ReadableStream` body must yield `Uint8Array`s, so a consumer can safely call `res.text()`, `res.arrayBuffer()`, or iterate `response.body.getReader()` directly.
 
 ## Scoped Signals
 
@@ -297,10 +297,12 @@ sharedCount.dispose();
 
 Creates a signal backed by a `BroadcastChannel`. Values are `structuredClone`d before being compared/stored/broadcast, so they must be structured-clone-safe (plain objects, arrays, primitives, etc. — no functions or DOM nodes).
 
-- `initialValue` — the signal's starting value (local to this instance until the first broadcast is received)
+- `initialValue` — the signal's starting value (local to this instance until it either receives a broadcast or confirms it's the first one on the channel)
 - `channelName` (optional) — the `BroadcastChannel` name to synchronize on; defaults to `'default-signal'`
 
 Returns an object with `value` (get/set), `subscribe(fn)`, and `dispose()`.
+
+**Joining an already-active channel:** every new instance asks any already-broadcasting peer for its current state as soon as it's constructed (a lightweight request/response exchange over the same `BroadcastChannel`, not a separate connection). If a peer answers, the newcomer adopts that peer's current value and version before it's ever written to — so a tab opened after others have already been writing converges to the current value shortly after construction, rather than starting from its own stale `initialValue` and never catching up. If no peer answers (it's the first/only instance on the channel), it simply keeps `initialValue`. This sync happens asynchronously, on the same message channel as ordinary updates — expect a short delay (one round trip) after construction before a late joiner's `.value` reflects the current state.
 
 ### `generateWorkerCode(signalCode, name?)`
 

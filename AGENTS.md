@@ -68,6 +68,39 @@ CI (`.github/workflows/ci.yml`) runs `npm ci`, `npm run build`, then
   the "cannot modify computed signal directly" guard entirely. Fixed in
   `0.1.0` -- any new bypass of the base `dispose()`/mutation guards
   reintroduces this.
+- **`BroadcastSignal` needs a join-time sync, not just a shared-looking
+  version counter.** Each instance used to track its own version counter
+  starting at 0 with no way to learn what version/value already-open peers
+  had reached -- a tab opened after others had already written several
+  times started from its own stale `initialValue` and never caught up, and
+  its own subsequent writes (still counted from its own low version
+  number) were ignored by peers that were already ahead. Fixed in `0.1.2`
+  by extending the *same* message protocol (no separate handshake
+  channel): every instance posts a `sync-request` on construction, and any
+  peer with real state (`#version > 0`) answers with a `state` message --
+  the exact same self-describing `{ id, value, version }` shape used for
+  ordinary updates, so a receiver can't tell (and doesn't need to)
+  whether a `state` message is an organic update or a sync reply. When
+  changing `#adopt()`: a `state` message can legitimately arrive more than
+  once for the same version (an update and a redundant sync-reply can
+  cross in flight), so it must only call `#notifyEffects()` when the
+  value is actually changing (`Object.is` check) -- otherwise a tied
+  `(version, id)` still re-adopts and double-fires subscribers, which is
+  exactly as observable a bug as the original one and was caught the same
+  way (a repro run in a loop, not a single run -- it only reproduced
+  intermittently, depending on `crypto.randomUUID()` ordering between the
+  two instances).
+- **`toSSEResponse`/`toReadableStream` must enqueue bytes, not strings.**
+  A `Response`/`ReadableStream` body contract requires `Uint8Array` chunks;
+  enqueueing a raw SSE-formatted string worked for nothing that actually
+  reads the stream as bytes (`res.text()`, `res.arrayBuffer()`) and threw
+  `TypeError: Received non-Uint8Array chunk` the moment it was. Fixed in
+  `0.1.2` with a shared `TextEncoder` encoding each chunk before
+  `controller.enqueue()`. Note `res.text()` only rejects fast on a bad
+  chunk type -- it does NOT resolve quickly even once fixed, because it
+  buffers the *entire* body until the stream closes, and an SSE stream is
+  intentionally long-lived and never closes on its own; test that path
+  with a short `Promise.race()` timeout, not a bare `await res.text()`.
 
 ## Definition of done
 
