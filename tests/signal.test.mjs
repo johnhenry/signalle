@@ -537,3 +537,42 @@ test('linked list implementation', async (t) => {
   assert.equal(list.size, 0, 'Size should be zero after clearing');
   assert.deepEqual(list.toArray(), [], 'List should be empty after clearing');
 });
+
+// #12: a computed's value is only undefined until its first run settles;
+// a synchronous compute function settles eagerly, an async one is awaited
+// through `ready`.
+test('computed with a sync compute fn has a value on first read', () => {
+  const a = signal(2);
+  const c = computed(a, (v) => v * 2);
+  assert.equal(c.value, 4, 'sync computeFn resolves eagerly');
+  const names = computed([signal('John'), signal('Doe')], (f, l) => `${f} ${l}`);
+  assert.equal(names.value, 'John Doe');
+});
+
+test('sync computed: effect fires once with the initial value, then on change', async () => {
+  const a = signal(1);
+  const c = computed(a, (v) => v + 1);
+  const seen = [];
+  effect(c, (v) => seen.push(v));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(seen, [2], 'initial value delivered exactly once');
+  a.value = 5;
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(seen, [2, 6]);
+});
+
+test('computed with an async compute fn is undefined until ready settles', async () => {
+  const a = signal(2);
+  const c = computed(a, async (v) => v * 2);
+  assert.equal(c.value, undefined, 'async computeFn: undefined until the first run settles');
+  assert.ok(c.ready instanceof Promise, 'ready is a promise');
+  await c.ready;
+  assert.equal(c.value, 4);
+});
+
+test('ready also resolves for a sync computed', async () => {
+  const c = computed(signal(3), (v) => v * 3);
+  assert.ok(c.ready instanceof Promise, 'ready is a promise');
+  await c.ready;
+  assert.equal(c.value, 9);
+});

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project will adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0.0.
 
+## 0.1.3 (2026-10-07)
+
+### Fixed
+
+- **README showed `computed().value` as a synchronous read of the derived value (#12)**: the `computed` example logged `"John Doe"` / `"Jane Doe"` straight after construction and after a write, but `computed()` takes an async function, so `.value` is `undefined` until the first run settles and updates land asynchronously. The README now states that rule and the example shows the real behaviour.
+
+### Added
+
+- A `computeFn` that returns a plain value (not a promise) now settles synchronously inside `computed()`, so `.value` is correct as soon as the constructor returns. Async compute functions behave exactly as before. Non-breaking; the `computeFn` type is widened to `T | Promise<T>`.
+- `Computed#ready`: a promise that resolves once the first computation has settled (immediately for a synchronous `computeFn`).
+- `Computed#recompute()` is typed as `Promise<boolean>` (it already resolved to whether the value changed).
+
 ## 0.1.2 (2026-09-27)
 
 ### Fixed

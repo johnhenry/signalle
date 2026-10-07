@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/signalle",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Beautiful, modern signals with optional DOM integration",
   "type": "module",
   "main": "dist/index.mjs",

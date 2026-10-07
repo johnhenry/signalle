@@ -49,7 +49,7 @@ declare module '@johnhenry/signalle' {
      */
     constructor(
       deps: Signal<any> | Signal<any>[],
-      computeFn: (...args: any[]) => Promise<T>
+      computeFn: (...args: any[]) => T | Promise<T>
     );
 
     /**
@@ -59,9 +59,17 @@ declare module '@johnhenry/signalle' {
     get value(): T | undefined;
 
     /**
-     * Recomputes the value if dependencies have changed
+     * Resolves once the first computation has settled. With an async
+     * `computeFn`, `.value` is `undefined` until then; a synchronous
+     * `computeFn` is already settled when the constructor returns.
      */
-    recompute(): Promise<void>;
+    readonly ready: Promise<void>;
+
+    /**
+     * Recomputes the value if dependencies have changed. Resolves to whether
+     * the value changed.
+     */
+    recompute(): Promise<boolean>;
 
     /**
      * Disposes of this computed signal and removes all subscriptions
@@ -84,7 +92,7 @@ declare module '@johnhenry/signalle' {
    */
   export function computed<T>(
     deps: Signal<any> | Signal<any>[],
-    fn: (...args: any[]) => Promise<T>
+    fn: (...args: any[]) => T | Promise<T>
   ): Computed<T>;
 
   /**
@@ -173,7 +181,7 @@ declare module '@johnhenry/signalle/dom' {
   export function computedBind<T>(
     element: { [key: string]: any },
     deps: Signal<any> | Signal<any>[],
-    computeFn: (...args: any[]) => Promise<T>,
+    computeFn: (...args: any[]) => T | Promise<T>,
     options?: Partial<BindOptions>
   ): Computed<T>;
 
@@ -323,7 +331,7 @@ declare module '@johnhenry/signalle/scope' {
      */
     computed<T>(
       deps: Signal<any> | Signal<any>[],
-      fn: (...args: any[]) => Promise<T>
+      fn: (...args: any[]) => T | Promise<T>
     ): Computed<T>;
 
     /**
