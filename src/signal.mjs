@@ -302,7 +302,7 @@ export class Signal {
 export class Computed extends Signal {
   /** @type {Signal<any>[]} */
   #deps;
-  /** @type {(...args: any[]) => Promise<T>} */
+  /** @type {(...args: any[]) => T | Promise<T>} */
   #compute;
   /** @type {(() => Promise<void>) | null} */
   #cleanup = null;
@@ -327,10 +327,12 @@ export class Computed extends Signal {
   #depVersions;
   /** @type {boolean} */
   #initialized = false;
+  /** @type {Promise<void>} */
+  #ready;
 
   /**
    * @param {Signal<any> | Signal<any>[]} deps
-   * @param {(...args: any[]) => Promise<T>} computeFn
+   * @param {(...args: any[]) => T | Promise<T>} computeFn
    * @param {object} [scope] - Optional SignalScope for isolated reactivity (see SignalScope#computed)
    */
   constructor(deps, computeFn, scope = null) {
@@ -352,9 +354,28 @@ export class Computed extends Signal {
     // time (nothing has had the chance to depend on `this`), so once the
     // initial compute settles, fire this computed's own effect subscribers
     // (added via `subscribe()` before it finished) directly.
-    this.recompute().then((changed) => {
-      if (changed) void this._notify();
+    //
+    // A synchronous `computeFn` settles during this very call (see
+    // `#recomputeOnce`), so `.value` is already correct when the constructor
+    // returns and there is nothing to notify (no subscriber can exist yet).
+    // An async `computeFn` leaves `.value === undefined` until it settles;
+    // `ready` resolves once that first run has settled and been announced.
+    const first = this.recompute();
+    this.#ready = first.then((changed) => {
+      if (changed && !settledSynchronously) void this._notify();
     });
+    const settledSynchronously = this.#initialized;
+  }
+
+  /**
+   * Resolves once the first computation has settled (and this computed's
+   * early subscribers have been notified). For an async `computeFn`, `.value`
+   * is `undefined` until then; a synchronous `computeFn` is already settled
+   * at construction.
+   * @returns {Promise<void>}
+   */
+  get ready() {
+    return this.#ready;
   }
 
   /**
@@ -434,7 +455,12 @@ export class Computed extends Signal {
     }
 
     const depValues = this.#deps.map((dep) => dep.value);
-    const result = await this.#compute(...depValues);
+    // Only yield when the compute function actually returned a thenable, so a
+    // synchronous `computeFn` settles (and `.value` is readable) immediately.
+    let result = this.#compute(...depValues);
+    if (result && typeof result.then === "function") {
+      result = await result;
+    }
 
     // Handle both array returns [value, cleanup] and direct value returns
     let changed;

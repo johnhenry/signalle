@@ -79,19 +79,30 @@ console.log(name.value); // "Jane"
 
 ### computed(deps, computeFn)
 
-Creates a computed signal that derives its value from other signals.
+Creates a computed signal that derives its value from other signals. `computeFn` may be synchronous or `async`:
+
+- **Synchronous `computeFn`** (returns a plain value): the first run happens inside `computed()`, so `.value` is correct immediately.
+- **Async `computeFn`** (returns a promise): `.value` is `undefined` until the first run settles, and later updates are applied asynchronously, one or more ticks after the dependency changes. Reading `.value` right after a write returns the previous result, not the new one.
+
+`computed.ready` is a promise that resolves once the first run has settled (immediately for a synchronous `computeFn`), and `effect(computed, fn)` / `createEffect()` run `fn` whenever a settled value arrives.
 
 ```javascript
 const firstName = signal('John');
 const lastName = signal('Doe');
 
-const fullName = computed([firstName, lastName], async (first, last) => {
-  return `${first} ${last}`;
-});
+// Synchronous: usable right away
+const initials = computed([firstName, lastName], (first, last) => first[0] + last[0]);
+console.log(initials.value); // "JD"
 
+// Async: undefined until the first run settles
+const fullName = computed([firstName, lastName], async (first, last) => `${first} ${last}`);
+console.log(fullName.value); // undefined
+await fullName.ready;
 console.log(fullName.value); // "John Doe"
+
 firstName.value = 'Jane';
-console.log(fullName.value); // "Jane Doe"
+console.log(fullName.value); // "John Doe" (the async update has not been applied yet)
+effect(fullName, (name) => console.log(name)); // logs "Jane Doe" once it settles
 ```
 
 ### effect(signal, fn)
