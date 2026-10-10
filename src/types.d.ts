@@ -124,7 +124,7 @@ declare module '@johnhenry/signalle' {
    * Batches multiple signal updates to prevent intermediate re-renders
    * @param fn Function containing multiple signal updates
    */
-  export function batch(fn: () => Promise<void>): Promise<void>;
+  export function batch(fn: () => void | Promise<void>): Promise<void>;
 
   /**
    * Runs a function without tracking dependencies
@@ -350,7 +350,7 @@ declare module '@johnhenry/signalle/scope' {
     /**
      * Batch signal updates within this scope.
      */
-    batch(fn: () => Promise<void>): Promise<void>;
+    batch(fn: () => void | Promise<void>): Promise<void>;
 
     /**
      * Run a function without tracking dependencies in this scope.
