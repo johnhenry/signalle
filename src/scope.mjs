@@ -1,5 +1,5 @@
 import { LinkedList } from './linked-list.mjs';
-import { Signal, Computed, effect, createEffectWithTracker, runPropagationWave } from './signal.mjs';
+import { Signal, Computed, effect, createEffectWithTracker, runPropagationWave, runBatched } from './signal.mjs';
 
 /**
  * An isolated signal scope with its own batch queue and tracking state.
@@ -105,25 +105,19 @@ export class SignalScope {
    * @param {() => Promise<void>} fn
    * @returns {Promise<void>}
    */
-  async batch(fn) {
+  batch(fn) {
     this.#batchDepth++;
-    try {
-      this.batching = true;
-      await fn();
-    } finally {
+    this.batching = true;
+    return runBatched(fn, () => {
       this.#batchDepth--;
-      if (this.#batchDepth === 0) {
-        this.batching = false;
-        // See `runPropagationWave` in signal.mjs (also fixes
-        // https://github.com/johnhenry/signalle/issues/7 for scoped
-        // batches): flushing via independent `s._notify()` calls per
-        // queued signal let a computed depending on more than one of them
-        // recompute once per changed input instead of once for the batch.
-        const signals = this.batchQueue.toArray();
-        this.batchQueue.clear();
-        await runPropagationWave(signals);
-      }
-    }
+      if (this.#batchDepth !== 0) return undefined;
+      this.batching = false;
+      // See `runPropagationWave` in signal.mjs (also fixes
+      // https://github.com/johnhenry/signalle/issues/7 for scoped batches).
+      const signals = this.batchQueue.toArray();
+      this.batchQueue.clear();
+      return runPropagationWave(signals);
+    });
   }
 
   /**

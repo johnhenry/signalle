@@ -253,29 +253,24 @@ export class Signal {
    * @param {() => Promise<void>} fn
    * @returns {Promise<void>}
    */
-  static async batch(fn) {
+  static batch(fn) {
     Signal.#batchDepth++;
-    try {
-      Signal.#batching = true;
-      await fn();
-    } finally {
+    Signal.#batching = true;
+    return runBatched(fn, () => {
       Signal.#batchDepth--;
       // Only the outermost batch() call flushes: a nested batch() call
       // finishing must NOT flip #batching off or drain #batchQueue, since
       // the still-in-progress outer batch (and the shared queue) owns
       // updates queued both before and after the nested call.
-      if (Signal.#batchDepth === 0) {
-        Signal.#batching = false;
-        // Process all queued updates as a single coordinated propagation
-        // wave (see `runPropagationWave`) rather than firing each queued
-        // signal's `_notify()` independently -- the latter is what let a
-        // computed depending on more than one signal written in this batch
-        // recompute once per changed input instead of once total.
-        const signals = Signal.#batchQueue.toArray();
-        Signal.#batchQueue.clear();
-        await runPropagationWave(signals);
-      }
-    }
+      if (Signal.#batchDepth !== 0) return undefined;
+      Signal.#batching = false;
+      // Process all queued updates as a single coordinated propagation
+      // wave (see `runPropagationWave`) rather than firing each queued
+      // signal's `_notify()` independently.
+      const signals = Signal.#batchQueue.toArray();
+      Signal.#batchQueue.clear();
+      return runPropagationWave(signals);
+    });
   }
 
   /**
@@ -559,6 +554,40 @@ export class Computed extends Signal {
   [Symbol.dispose]() {
     this.dispose();
   }
+}
+
+/**
+ * Shared body of `Signal.batch()` / `SignalScope#batch()` (issue #15).
+ *
+ * `leave` decrements the depth and, for the outermost call, flushes the
+ * queue (returning the propagation promise, or undefined when nested).
+ * It must run SYNCHRONOUSLY right after a synchronous `fn` returns:
+ * `createEffect` re-runs are scheduled with `setTimeout(0)` from inside the
+ * flush, so a flush deferred behind an `await` of a non-promise would
+ * schedule them after any timer the caller queued right after
+ * `batch(() => ...)` -- the effect would appear never to have re-run. Only
+ * a thenable `fn` result is awaited before flushing.
+ * @param {() => any} fn
+ * @param {() => Promise<void> | undefined} leave
+ * @returns {Promise<void>}
+ */
+export function runBatched(fn, leave) {
+  let result;
+  try {
+    result = fn();
+  } catch (err) {
+    return Promise.resolve(leave()).then(() => { throw err; }, () => { throw err; });
+  }
+  if (result && typeof result.then === 'function') {
+    return (async () => {
+      try {
+        await result;
+      } finally {
+        await leave();
+      }
+    })();
+  }
+  return Promise.resolve(leave()).then(() => undefined);
 }
 
 /**
