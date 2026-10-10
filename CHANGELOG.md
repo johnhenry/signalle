@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project will adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0.0.
 
+## 0.1.4 (2026-10-09)
+
+### Fixed
+
+- **`createEffect` did not re-run after a tracked signal was written inside a synchronous `batch()` (#15)**: `batch()` was an `async` function that always did `await fn()`, so even when `fn` returned a plain value (not a promise) the flush of the queued writes was deferred behind a microtask. `createEffect` schedules its re-run with `setTimeout(0)` from inside that flush, so the re-run was queued *after* any timer the caller registered right after `batch(() => { ... })` and appeared never to have happened (the same write outside `batch()` fires its effects synchronously, which is why it looked fine). `Signal.batch()` and `SignalScope#batch()` now share one `runBatched` helper that flushes synchronously when `fn` returns a non-thenable, and awaits only a thenable result before flushing. Nested batches still flush only at the outermost level, writes still coalesce into one propagation wave (one effect run per batch, each dependent computed recomputed once), and a throwing `fn` still flushes then rejects. Added regression tests for the issue's repro, nested batches, several signals in one batch, an effect writing another signal, computed values read in the batch, coalescing, scoped batches and a throwing batch.
+
 ## 0.1.3 (2026-10-07)
 
 ### Fixed
