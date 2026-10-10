@@ -439,3 +439,71 @@ declare module '@johnhenry/signalle/broadcast' {
    */
   export function generateWorkerCode(signalCode: string, name?: string): string;
 }
+
+declare module '@johnhenry/signalle/iterable' {
+  import { Signal } from '@johnhenry/signalle';
+
+  /**
+   * Anything `toAsyncIterable` can read from: a `Signal`, a `Computed`, a
+   * scoped signal, or a `BroadcastSignal`.
+   */
+  interface Subscribable<T> {
+    subscribe(fn: (value: T) => void): () => void;
+  }
+
+  interface ToAsyncIterableOptions {
+    /** Ends the iteration (like `return()`) when aborted. */
+    signal?: AbortSignal;
+    /** Yield the value current at call time first (default: true). */
+    initial?: boolean;
+    /**
+     * `true` (default): conflate -- a slow reader gets the newest value, not
+     * every intermediate one. `false`: buffer every change in order.
+     */
+    latest?: boolean;
+    /**
+     * With `latest: false`, the most values to buffer; past it the oldest is
+     * dropped. A positive integer; unbounded when omitted.
+     */
+    limit?: number;
+  }
+
+  /**
+   * An async iterable of a signal's values. Subscribes immediately; ending
+   * the iteration (`break`, `return()` or abort) unsubscribes. An abort
+   * completes the iteration (`{ done: true }`), it does not reject.
+   */
+  export function toAsyncIterable<T>(
+    source: Subscribable<T>,
+    options?: ToAsyncIterableOptions
+  ): AsyncIterableIterator<T>;
+
+  interface FromAsyncIterableOptions {
+    /** Aborting does the same as `dispose()`. */
+    signal?: AbortSignal;
+  }
+
+  interface FromAsyncIterableHandle<T> {
+    /** Takes each yielded value. Not disposed by the adapter. */
+    signal: Signal<T>;
+    /** Stop writing and call the source iterator's `return()` (once). */
+    dispose(): void;
+    /**
+     * Resolves when the source completes, or on `dispose()`/abort; rejects
+     * if the source throws. Pre-marked as handled, so an ignored failure is
+     * not an unhandled rejection.
+     */
+    done: Promise<void>;
+    [Symbol.dispose](): void;
+  }
+
+  /**
+   * A signal driven by an async iterable: the signal takes each yielded
+   * value.
+   */
+  export function fromAsyncIterable<T>(
+    iterable: AsyncIterable<T>,
+    initial: T,
+    options?: FromAsyncIterableOptions
+  ): FromAsyncIterableHandle<T>;
+}

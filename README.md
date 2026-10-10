@@ -20,6 +20,7 @@ A beautiful, modern JavaScript signals library with optional DOM integration. Si
 - [Server-Side Streaming](#server-side-streaming)
 - [Scoped Signals](#scoped-signals)
 - [Broadcast Signals](#broadcast-signals)
+- [Async Iterables](#async-iterables)
 - [Exports](#exports)
 - [Architecture](#architecture)
 - [Security model](#security-model)
@@ -331,6 +332,65 @@ const blob = new Blob([workerCode], { type: 'application/javascript' });
 const worker = new Worker(URL.createObjectURL(blob));
 ```
 
+## Async Iterables
+
+Adapters between signals and async iterables, from `@johnhenry/signalle/iterable`. They use only `Promise`, `queueMicrotask`, `Symbol.asyncIterator` and `AbortSignal` (no DOM), so they run the same in a Worker, an iframe and Node.
+
+```js
+import { signal } from '@johnhenry/signalle';
+import { toAsyncIterable, fromAsyncIterable } from '@johnhenry/signalle/iterable';
+
+const count = signal(0);
+
+// Signal -> async iterable
+const ac = new AbortController();
+for await (const value of toAsyncIterable(count, { signal: ac.signal })) {
+  render(value);            // `break`, `return()` or ac.abort() unsubscribes
+}
+
+// Async iterable -> signal
+const { signal: latestPrice, dispose, done } = fromAsyncIterable(priceFeed(), null);
+latestPrice.subscribe((price) => console.log(price));
+done.catch((err) => console.error('feed failed', err));
+// later: dispose() -> calls priceFeed's return()
+```
+
+### `toAsyncIterable(signal, { signal, initial = true, latest = true, limit }?)`
+
+Returns an async iterator (also an async iterable) of the signal's values. `signal` can be any object with `subscribe(fn) => unsubscribe`: a `Signal`, a `Computed`, a scoped signal, or a `BroadcastSignal`.
+
+- **`latest: true` (default): conflating.** At most one value is held. A reader that falls behind gets the newest value, never the intermediate ones.
+- **`latest: false`: buffering.** Every change is queued and yielded in order. The queue is unbounded unless `limit` (a positive integer) is set; past `limit` the **oldest** queued value is dropped. `limit` is ignored with `latest: true`.
+- **Repeats**: in either mode, a notification equal (`Object.is`) to the previous one is not yielded again; see [Timing](#timing) for why that matters.
+- **`initial`**: yield the value current at call time first. With `initial: false`, only changes after the call are yielded.
+- **Cleanup**: `break` (or anything else that calls `return()`) and aborting `signal` unsubscribe. An abort *completes* the iteration (`{ done: true }`); it does not reject. An already-aborted `signal` never subscribes.
+
+**Not done:** the subscription is taken when `toAsyncIterable()` is called, not on the first `next()`, so a buffered iterator doesn't miss changes made before the loop starts. An iterator you never iterate keeps its subscription until you call `return()` or abort. It is a single iterator, not a broadcast: two loops over the same result share (split) its values; call `toAsyncIterable()` once per reader. Disposing the source signal does not end the iteration (signals have no completion event); end it yourself.
+
+### `fromAsyncIterable(iterable, initial, { signal }?)`
+
+Returns `{ signal, dispose, done }` (also `[Symbol.dispose]`, so it works with `using`). `signal` is a new plain `Signal` that starts at `initial` and takes each value the iterable yields.
+
+- **`dispose()`** stops writing to the signal and calls the iterator's `return()` once, which runs an async generator's `finally`. It is idempotent, and a no-op once the source has finished. Aborting `signal` does the same; if `signal` is already aborted, the iterable is never opened.
+- **`done`** settles when iteration ends. It resolves when the source completes or on `dispose()`/abort, and rejects with the error if the source throws. It doesn't wait for `return()` to finish: an async generator suspended in an `await` (rather than at a `yield`) can't run its `finally` until that `await` settles. Any rejection from `return()` itself is swallowed.
+- **Errors** are reported only through `done`. `done` is pre-marked as handled, so a failure you ignore does not crash Node with an unhandled rejection. Await it or `.catch()` it if you need to know. On an error the signal keeps its last value.
+
+**Not done:** the returned signal is never disposed by the adapter (it keeps its last value after the source ends), and it is not scoped. Sync iterables (arrays, plain generators) are rejected with a `TypeError`; wrap one in an `async function*` if you need it.
+
+### Timing
+
+signalle's notification timing has two cases (see [`computed`](#computeddeps-computefn) and the 0.1.4 entry in `CHANGELOG.md`):
+
+- A write to a plain signal that **no `computed()` depends on** notifies its subscribers **synchronously**, inside the `.value = ...` write. Inside `batch()`, that notification waits for the outermost batch to flush.
+- A write to a signal that **has computed dependents** runs a propagation wave: the computeds recompute first (asynchronously, even when `computeFn` is synchronous), then every changed node's subscribers fire, including the written signal's own. Subscribers receive the value current *when they fire*, so a synchronous burst of writes to such a signal is reported once per write, each time with the final value. An async `computeFn` settles one or more ticks after the write.
+
+How the adapters fit in:
+
+- **`fromAsyncIterable`** writes each yielded value with `signal.value = v`, in the microtask where the source's `next()` resolved. That is an ordinary write: the returned signal's subscribers run synchronously during it unless computeds depend on the signal, in which case they run after those computeds settle. An `Object.is`-equal value is a no-op, so consecutive duplicates don't notify.
+- **`toAsyncIterable`** receives notifications at whatever time signalle delivers them, but `next()` always resolves asynchronously, since it returns a promise. With `latest: true`, delivery to a reader that is already waiting is deferred by one microtask, so a synchronous burst of writes, such as several assignments in a row or a `batch()` flush, reaches it as **one final value**.
+- With **`latest: false`**, every notification is kept, but a notification equal (`Object.is`) to the previous one is not yielded again. That collapses the repeated final values described above. It also means the intermediate values of a synchronous burst to a signal *with computed dependents* are not observable: signalle never reports them, so the iterator yields only the final one. A signal with no computed dependents reports, and the iterator yields, every intermediate value.
+- For a **`computed` source**, values arrive when the computation settles, never before. With `initial: true` on an async computed that hasn't settled yet, the first value yielded is its first *settled* value, not the pre-settle `undefined`. A computed that recomputes to the same value doesn't notify, so it doesn't yield.
+
 ## Exports
 
 | Export | Description |
@@ -340,6 +400,7 @@ const worker = new Worker(URL.createObjectURL(blob));
 | `signalle/stream` | Server: `toReadableStream`, `toSSEResponse` |
 | `signalle/scope` | Isolation: `createScope` (`SignalScope`) |
 | `signalle/broadcast` | Cross-tab/worker sync: `createBroadcastSignal`, `generateWorkerCode` |
+| `signalle/iterable` | Async iterables: `toAsyncIterable`, `fromAsyncIterable` |
 
 ## Architecture
 
@@ -362,7 +423,7 @@ anything you didn't write yourself.
 - **Every other export is plain data-flow code with no code generation or
   dynamic evaluation.** `signal()`, `computed()`, `effect()`,
   `createEffect()`, `batch()`, `untrack()`, the DOM bindings, the SSE stream
-  helpers, and `createScope()` never construct or execute a string as code.
+  helpers, the async-iterable adapters, and `createScope()` never construct or execute a string as code.
   The security surface described below is scoped to `generateWorkerCode()`
   alone.
 - **The generated Worker gets you what any Worker gets you: no DOM access.**

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project will adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0.0.
 
+## 0.1.5 (2026-10-10)
+
+### Added
+
+- **`@johnhenry/signalle/iterable`: `toAsyncIterable` and `fromAsyncIterable` (#18, PR #19)**, a new subpath of adapters between signals and async iterables, for live values (johnhenry/miso#94). Additive only; no existing export changes, and the main entry is unchanged (like `/stream`, `/scope` and `/broadcast`, the adapters are exported from their subpath only). Neither adapter touches the DOM, so both run in a Worker, an iframe and Node.
+  - `toAsyncIterable(signal, { signal, initial = true, latest = true, limit })` returns an async iterator of the signal's values. It works with any `subscribe(fn) => unsubscribe` source (`Signal`, `Computed`, scoped signals, `BroadcastSignal`). `latest: true` conflates: a slow reader gets the newest value, and a synchronous burst reaches a waiting reader as one value. `latest: false` buffers every change in order, unbounded unless `limit` is set, past which the oldest value is dropped. `break`, `return()` and abort unsubscribe; an abort completes the iteration rather than rejecting. Consecutive `Object.is`-equal notifications are yielded once. Without that, a signal with computed dependents, which reports the final value once per write in a burst, would yield duplicates.
+  - `fromAsyncIterable(iterable, initial, { signal })` returns `{ signal, dispose, done, [Symbol.dispose] }`. The signal takes each yielded value. `dispose()` or an abort calls the iterator's `return()` once; an already-aborted signal never opens the iterable. `done` resolves when iteration ends and rejects on a source error. It is pre-marked as handled, so an ignored failure is not an unhandled rejection.
+  - The README's new `## Async Iterables` section states how the adapters interact with signalle's notification timing (synchronous for a plain signal, after the propagation wave for a signal with computed dependents, asynchronous for async computeds). It also lists what the adapters don't do.
+  - Types in `src/types.d.ts` (`declare module '@johnhenry/signalle/iterable'`), the `./iterable` entry in `package.json` `exports`, and 25 tests in `tests/iterable.test.mjs`, including a `worker_threads` run.
+
 ## 0.1.4 (2026-10-09)
 
 ### Fixed
