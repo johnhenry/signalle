@@ -1,6 +1,6 @@
 {
   "name": "@johnhenry/signalle",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Beautiful, modern signals with optional DOM integration",
   "type": "module",
   "main": "dist/index.mjs",
@@ -25,6 +25,10 @@
     "./broadcast": {
       "types": "./dist/types.d.ts",
       "import": "./dist/broadcast.mjs"
+    },
+    "./iterable": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/iterable.mjs"
     }
   },
   "files": [
