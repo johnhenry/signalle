@@ -175,51 +175,164 @@ export const bindStyle = (element, property, signal, unit = "") => {
 };
 
 /**
- * Create a list binding that efficiently updates only changed items
- * @template T
- * @param {{ appendChild: (node: any) => void, removeChild: (node: any) => void, insertBefore: (node: any, ref: any) => void, children: any[] }} element
- * @param {import('./signal.mjs').Signal<Array<T & { id: string | number }>>} itemsSignal
- * @param {(item: T & { id: string | number }) => any} renderItem
- * @returns {import('./signal.mjs').Signal<Array<T & { id: string | number }>>}
+ * Longest increasing subsequence of `seq` (entries of -1 are skipped), as a
+ * Set of the indexes into `seq` that belong to it. Used by `bindList` to keep
+ * the largest run of already-ordered nodes in place and move only the rest.
+ * @param {number[]} seq
+ * @returns {Set<number>}
  */
-export const bindList = (element, itemsSignal, renderItem) => {
-  const itemCache = new Map();
+const longestIncreasing = (seq) => {
+  /** @type {number[]} */
+  const tails = [];
+  /** @type {number[]} */
+  const prev = new Array(seq.length).fill(-1);
+  for (let i = 0; i < seq.length; i++) {
+    const v = seq[i];
+    if (v < 0) continue;
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (seq[tails[mid]] < v) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) prev[i] = tails[lo - 1];
+    tails[lo] = i;
+  }
+  const keep = new Set();
+  let k = tails.length ? tails[tails.length - 1] : -1;
+  while (k >= 0) {
+    keep.add(k);
+    k = prev[k];
+  }
+  return keep;
+};
+
+/**
+ * Create a keyed list binding that efficiently updates only changed items.
+ *
+ * `bindList(element, itemsSignal, renderItem)` is the original form: items
+ * are keyed by `item.id`, and a node is rendered once per key. The third
+ * argument may instead be an options object, or a fourth options argument
+ * may follow `renderItem`:
+ *
+ * - `render(item, index)`: returns a node, or `{ node, update }` where
+ *   `update` patches that node later (it takes precedence over `options.update`).
+ * - `update(node, item, index, previousItem)`: called for an existing key whose
+ *   item changed (`!equals(previousItem, item)`). Without any update function,
+ *   an existing node is never re-rendered (the original behaviour).
+ * - `key`: a property name or `(item, index) => key`; defaults to `item.id`.
+ * - `equals(previousItem, item)`: defaults to `Object.is`.
+ *
+ * Only nodes that `bindList` created are moved or removed. Other children of
+ * `element` are left alone, and the list's nodes stay together as one block
+ * (appended after the existing children on the first render).
+ * @template T
+ * @param {any} element
+ * @param {import('./signal.mjs').Signal<T[]>} itemsSignal
+ * @param {((item: T, index: number) => any) | Record<string, any>} renderOrOptions
+ * @param {Record<string, any>} [maybeOptions]
+ * @returns {import('./signal.mjs').Signal<T[]>}
+ */
+export const bindList = (element, itemsSignal, renderOrOptions, maybeOptions) => {
+  const opts =
+    typeof renderOrOptions === "function"
+      ? { ...(maybeOptions || {}), render: renderOrOptions }
+      : { ...(renderOrOptions || {}) };
+  if (typeof opts.render !== "function") {
+    throw new TypeError("bindList: a render function is required");
+  }
+  const keyOf =
+    typeof opts.key === "function"
+      ? opts.key
+      : opts.key !== undefined && opts.key !== null
+        ? (/** @type {any} */ item) => item?.[opts.key]
+        : (/** @type {any} */ item) => item?.id;
+  const equals = typeof opts.equals === "function" ? opts.equals : Object.is;
+
+  /** @type {Map<any, { node: any, item: any, update: Function | undefined }>} */
+  let entries = new Map();
+  /** @type {any[]} nodes in list order */
+  let order = [];
+  // The node right after the list's block when the list was last empty, so
+  // an emptied list grows back in the same place among other children.
+  /** @type {any} */
+  let emptyRef = null;
+  let warnedDuplicate = false;
 
   /**
-   * @param {Array<T & { id: string | number }>} items
+   * @param {T[]} items
    */
   const updateList = async (items = []) => {
-    // Remove old items
-    const currentIds = new Set(items.map((item) => item.id));
-    for (const [id, node] of itemCache) {
-      if (!currentIds.has(id)) {
-        element.removeChild(node);
-        itemCache.delete(id);
-      }
+    if (!Array.isArray(items)) items = [];
+
+    // Where the block ends: the sibling after our last node (a foreign
+    // child or null), measured before anything moves.
+    let ref = null;
+    if (order.length) {
+      const last = order[order.length - 1];
+      ref = last.parentNode === element ? last.nextSibling : null;
+      // Skip over our own nodes that may follow if the block was disturbed.
+      const own = new Set(order);
+      while (ref && own.has(ref)) ref = ref.nextSibling;
+    } else if (emptyRef && emptyRef.parentNode === element) {
+      ref = emptyRef;
     }
 
-    // Add/update items
+    /** @type {Map<any, { node: any, item: any, update: Function | undefined }>} */
+    const nextEntries = new Map();
+    /** @type {any[]} */
+    const nextOrder = [];
     items.forEach((item, index) => {
-      const id = item.id;
-      let node = itemCache.get(id);
-
-      if (!node) {
-        node = renderItem(item);
-        itemCache.set(id, node);
+      const key = keyOf(item, index);
+      if (nextEntries.has(key)) {
+        if (!warnedDuplicate) {
+          warnedDuplicate = true;
+          console.warn(`bindList: duplicate key ${String(key)}; later items with the same key are skipped`);
+        }
+        return;
       }
-
-      // Ensure correct position
-      if (index >= element.children.length) {
-        element.appendChild(node);
-      } else if (element.children[index] !== node) {
-        element.insertBefore(node, element.children[index]);
+      let entry = entries.get(key);
+      if (!entry) {
+        const rendered = opts.render(item, index);
+        entry =
+          rendered && typeof rendered === "object" && !("nodeType" in rendered) && "node" in rendered
+            ? { node: rendered.node, item, update: rendered.update }
+            : { node: rendered, item, update: undefined };
+      } else if (!equals(entry.item, item)) {
+        const update = entry.update || opts.update;
+        const previous = entry.item;
+        entry = { ...entry, item };
+        if (typeof update === "function") update(entry.node, item, index, previous);
       }
+      nextEntries.set(key, entry);
+      nextOrder.push(entry.node);
     });
 
-    // Remove any extra children
-    while (element.children.length > items.length) {
-      element.removeChild(element.children[element.children.length - 1]);
+    // Remove nodes whose key is gone (only our own nodes).
+    const kept = new Set(nextOrder);
+    for (const node of order) {
+      if (!kept.has(node) && node.parentNode === element) {
+        element.removeChild(node);
+      }
     }
+
+    // Keep the longest run of nodes that are already in order; move the rest.
+    const oldIndex = new Map(order.map((node, i) => [node, i]));
+    const seq = nextOrder.map((node) =>
+      node.parentNode === element && oldIndex.has(node) ? /** @type {number} */ (oldIndex.get(node)) : -1
+    );
+    const stable = longestIncreasing(seq);
+    let cursor = ref;
+    for (let i = nextOrder.length - 1; i >= 0; i--) {
+      const node = nextOrder[i];
+      if (!stable.has(i)) element.insertBefore(node, cursor);
+      cursor = node;
+    }
+
+    if (!nextOrder.length) emptyRef = ref;
+    entries = nextEntries;
+    order = nextOrder;
 
     // Allow time for DOM to update
     await new Promise((resolve) => setTimeout(resolve, 0));

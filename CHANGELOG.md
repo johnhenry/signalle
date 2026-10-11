@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project will adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0.0.
 
+## 0.1.6 (2026-10-10)
+
+### Added
+
+- **`bindList` updates existing items whose data changed (#22)**, for keyed list patching in johnhenry/miso#108. Additive: `bindList(element, itemsSignal, renderItem)` still works as before, and a list whose container holds only list items behaves as it did.
+  - A new keyed form, `bindList(element, itemsSignal, { render, update, key, equals })`, or `bindList(element, itemsSignal, renderItem, { update, key, equals })`. `update(node, item, index, previous)` patches the existing node for a key whose item changed (`!equals(previous, item)`, default `Object.is`). `render` may return `{ node, update }` to give a node its own update. `key` is a property name or `(item, index) => key` (default `item.id`). Without an update function an existing node is never re-rendered, as before.
+  - Reordering keeps the longest run of already-ordered nodes in place and moves only the others, so moving one row in a 1,000-row list is one `insertBefore`, and changing one row's data is one `update` call and no DOM moves.
+  - Repeated keys log one `console.warn` and the later duplicates are skipped (before, they left the list in a mixed state).
+  - Types: `BindListOptions<T>`, `ListItemUpdate<T>` and the two `bindList` overloads in `src/types.d.ts`. The container type now only needs `insertBefore` and `removeChild`.
+
+### Fixed
+
+- **`bindList` removed container children it hadn't created (#22)**: it trimmed the container to as many children as there were items. It now moves and removes only its own nodes, keeps them together as one block (appended after the existing children on the first render), and refills an emptied list in the same place.
+
 ## 0.1.5 (2026-10-10)
 
 ### Added
