@@ -245,22 +245,63 @@ declare module '@johnhenry/signalle/dom' {
   ): Signal<T>;
 
   /**
-   * Creates a list binding that efficiently updates only changed items
+   * Patches an existing list node whose item changed. `previous` is the item
+   * the node last rendered or was patched with.
+   */
+  export type ListItemUpdate<T> = (node: any, item: T, index: number, previous: T) => void;
+
+  /** Options for the keyed form of `bindList`. */
+  export interface BindListOptions<T> {
+    /**
+     * Renders a new node for a key not seen before. May return the node, or
+     * `{ node, update }` where `update` patches that node later and takes
+     * precedence over `options.update`.
+     */
+    render: (item: T, index: number) => any | { node: any; update?: ListItemUpdate<T> };
+    /**
+     * Called for an existing key whose item changed (`!equals(previous, item)`).
+     * Without it (and without a per-node update), existing nodes are never
+     * re-rendered, as before 0.1.6. Index-only changes (moves) don't call it.
+     */
+    update?: ListItemUpdate<T>;
+    /** A property name or `(item, index) => key`. Default: `item.id`. Keys must be unique. */
+    key?: keyof T | ((item: T, index: number) => unknown);
+    /** Decides whether an item changed. Default: `Object.is`. */
+    equals?: (previous: T, item: T) => boolean;
+  }
+
+  /** The container `bindList` renders into. */
+  type ListContainer = {
+    insertBefore: (node: any, ref: any) => any;
+    removeChild: (node: any) => any;
+  };
+
+  /**
+   * Creates a keyed list binding that only touches the items that changed.
+   * Items are keyed by `item.id`. Only nodes `bindList` created are moved or
+   * removed; other children of `element` are left alone, and the list's nodes
+   * stay together as one block (appended after existing children on the first
+   * render).
    * @param element Container element for the list
    * @param itemsSignal Signal containing array of items with ids
    * @param renderItem Function to render each item into a DOM node
+   * @param options Optional `update`, `key` and `equals` (see `BindListOptions`)
    * @returns The bound signal
    */
   export function bindList<T>(
-    element: {
-      appendChild: (node: any) => void;
-      removeChild: (node: any) => void;
-      insertBefore: (node: any, ref: any) => void;
-      children: any[];
-    },
+    element: ListContainer,
     itemsSignal: Signal<Array<T & { id: string | number }>>,
-    renderItem: (item: T & { id: string | number }) => any
+    renderItem: (item: T & { id: string | number }, index: number) => any,
+    options?: Omit<BindListOptions<T & { id: string | number }>, 'render'>
   ): Signal<Array<T & { id: string | number }>>;
+  /**
+   * Keyed form: `bindList(element, itemsSignal, { render, update, key, equals })`.
+   */
+  export function bindList<T>(
+    element: ListContainer,
+    itemsSignal: Signal<T[]>,
+    options: BindListOptions<T>
+  ): Signal<T[]>;
 }
 
 declare module '@johnhenry/signalle/stream' {

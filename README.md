@@ -210,7 +210,46 @@ bindClass(document.body, 'dark-theme', themeToggle);
 - `bindAttribute(element, attribute, signal, render)`: Bind to an attribute
 - `bindClass(element, className, signal)`: Toggle a class
 - `bindStyle(element, property, signal, unit)`: Bind to a style property
-- `bindList(element, itemsSignal, renderItem)`: Efficient list rendering
+- `bindList(element, itemsSignal, renderItem, options?)` or `bindList(element, itemsSignal, { render, update, key, equals })`: Keyed list rendering (see below)
+
+### Keyed lists: `bindList`
+
+`bindList` renders one node per key and, on each change, adds nodes for new keys, removes nodes for keys that are gone, and moves the rest into order. It keeps the longest run of nodes that are already in order where they are, so moving one row is one DOM move.
+
+```javascript
+import { signal } from '@johnhenry/signalle';
+import { bindList } from '@johnhenry/signalle/dom';
+
+const todos = signal([{ id: 1, text: 'Write tests', done: false }]);
+
+bindList(document.querySelector('#todos'), todos, {
+  key: 'id', // or (item, index) => key; the default is item.id
+  render: (todo) => {
+    const li = document.createElement('li');
+    li.textContent = todo.text;
+    return li;
+  },
+  // Called for an existing key whose item changed. Patch the node in place.
+  update: (li, todo, index, previous) => {
+    li.textContent = todo.text;
+    li.classList.toggle('done', todo.done);
+  },
+});
+
+// Replace only the item that changed; the others keep their references.
+todos.value = todos.value.map((t) => (t.id === 1 ? { ...t, done: true } : t));
+```
+
+- **Changed items:** an item counts as changed when `equals(previous, item)` is false. The default is `Object.is`, so treat items as immutable: replace a changed item with a new object and keep the unchanged ones as they are. `update(node, item, index, previous)` then runs once for that item. `render` may instead return `{ node, update }`, and that node's own `update` is used.
+- **Without `update`** (the original `bindList(element, itemsSignal, renderItem)` form), an existing node is never re-rendered when its item changes. This is the behaviour before 0.1.6 and is still the default.
+- **Other children are left alone:** `bindList` only moves or removes the nodes it created. On the first render its nodes are appended after the container's existing children, and they stay together as one block, so a header before the list or a footer added after it stays where it is. An emptied list refills in the same place.
+
+What it doesn't do:
+
+- `update` doesn't run when only an item's index changes (a move). If a row shows its index, compare it in `equals` or re-render it yourself.
+- Keys must be unique. A repeated key logs one `console.warn` and the later items with that key are skipped.
+- An item mutated in place and set again (same object) is not seen as changed under the default `equals`.
+- There is no dispose; the binding lives as long as the signal's subscription.
 
 ## Server-Side Streaming
 
