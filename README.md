@@ -528,6 +528,11 @@ cross-reference that exists in this README is a pointer, not a dependency:
   you need to run code you don't trust. `generateWorkerCode()` here performs
   zero sandboxing of its own; andbox documents its own, narrower set of
   guarantees and gaps for that job.
+- **[`@johnhenry/prism`](https://github.com/johnhenry/prism)** — a live
+  HTTP request inspector/proxy that uses `signal`/`computed` and
+  `toSSEResponse()` (`@johnhenry/signalle/stream`) for its dashboard's
+  live request feed — captured requests push into a signal, and connected
+  dashboards subscribe to it as a Server-Sent Events stream.
 
 ## License
 
